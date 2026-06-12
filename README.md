@@ -53,16 +53,7 @@ src/
 │   │   └── index.html
 │   └── game/
 │       └── index.html
-├── game_logic/
-│   ├── game.py
-│   └── cards/
-│       ├── monsters/
-│       ├── heroes/
-│       ├── leaders/
-│       ├── modifiers/
-│       ├── items/
-│       ├── challenge/
-│       └── magic/
+├── game_logic/.../
 └── static/
     ├── css/
     │   └── style.css
