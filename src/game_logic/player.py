@@ -11,7 +11,8 @@ class Player:
         self.hand: list[Card] = []
         self.party: list[Hero | Monster] = []
         self.party_leader: Leader | None = None
-        self.action_points: int = 0 
+        self.action_points: int = 0
+        
     def draw(self, deck: list[Card]) -> None:
         self.hand.append(deck.pop())
 
