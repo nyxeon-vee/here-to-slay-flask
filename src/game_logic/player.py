@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
-from exceptions import CardNotInHandError, CardNotInPartyError
+from game_logic.exceptions import CardNotInHandError, CardNotInPartyError
 if TYPE_CHECKING:
     from game_logic.base import Card, Hero, Leader, Monster
 
@@ -12,6 +12,7 @@ class Player:
         self.party: list[Hero | Monster] = []
         self.party_leader: Leader | None = None
         self.action_points: int = 0
+        self.current_roll: int = 0
         
     def draw(self, deck: list[Card]) -> None:
         self.hand.append(deck.pop())

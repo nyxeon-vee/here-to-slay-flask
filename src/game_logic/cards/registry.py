@@ -1,4 +1,4 @@
-from base import Card
+from game_logic.base import Card
 
 CARD_REGISTRY: dict[str, type[Card]] = {}
 

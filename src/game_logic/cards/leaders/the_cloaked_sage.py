@@ -1,6 +1,6 @@
 from game_logic.cards.registry import register
 from game_logic.base import Leader, HeroClass, GameEvent
-from game_logic.game import Game,
+from game_logic.game import Game
 from game_logic.player import Player
 @register("the_cloaked_sage")
 class TheCloakedSage(Leader):

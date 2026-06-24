@@ -13,5 +13,5 @@ class TheCharismaticSong(Leader):
         )
 
     def on_event(self, event: GameEvent, game: Game, player: Player) -> None:
-            if event == GameEvent.HERO_ROLL:
-                game.current_roll += 1
+        if event == GameEvent.HERO_ROLL:
+            player.current_roll += 1

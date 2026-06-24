@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING, NamedTuple
 if TYPE_CHECKING:
-    from game_logic.game import Game, Phase
+    from game_logic.game import Game
     from game_logic.player import Player
 from abc import ABC, abstractmethod
 from enum import Enum, auto
@@ -36,6 +36,14 @@ class GameEvent(Enum):
     CHALLENGE_ROLL  = auto()
     MONSTER_SLAIN   = auto()
     MODIFIER_PLAYED = auto()
+
+class Phase(Enum):
+    LOBBY            = auto()
+    ACTION           = auto()
+    CHALLENGE_WINDOW = auto()
+    ROLL_PENDING     = auto()
+    AWAITING_CHOICE  = auto()
+    END_TURN         = auto()
 
 class CardType(Enum):
     HERO      = "hero"
@@ -104,11 +112,11 @@ class Hero(Card):
     def apply(self, game: Game, player: Player) -> None:
         player.hand.remove(self)
         player.party.append(self)
-        game.phase = Phase.ROLL_PENDING 
-        game.roll_dice()
+        game.phase = Phase.ROLL_PENDING
+        game.roll_dice(player)
         if player.party_leader:
             player.party_leader.on_event(GameEvent.HERO_ROLL, game, player)
-        if self.evaluate_roll(game.current_roll) == RollOutcome.WIN:
+        if self.evaluate_roll(player.current_roll) == RollOutcome.WIN:
             self.use_ability(game, player)
         if game.phase == Phase.ROLL_PENDING:
             game.phase = Phase.ACTION
@@ -138,7 +146,9 @@ class Monster(Card):
         """
         Logic on what happens when the player fails to slay monster..
         """
-
+    def on_event(self, event: GameEvent, game: Game, player: Player) -> None:
+        pass
+    
     def evaluate_roll(self, roll: int) -> RollOutcome:
         if self.defeat.check(roll):
             return RollOutcome.WIN

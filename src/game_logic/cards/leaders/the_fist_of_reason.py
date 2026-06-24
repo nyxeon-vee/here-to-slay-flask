@@ -14,4 +14,4 @@ class TheDivineArrow(Leader):
 
     def on_event(self, event: GameEvent, game: Game, player: Player) -> None:
         if event == GameEvent.CHALLENGE_ROLL:
-            game.current_roll += 2
+            player.current_roll += 2
