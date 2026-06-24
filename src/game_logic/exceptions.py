@@ -8,3 +8,4 @@ class CardNotInHandError(Exception):
     pass
 class PartyNotFulfillRequiermentError(Exception):
     pass
+class PlayerHandEmptyError(Exception)

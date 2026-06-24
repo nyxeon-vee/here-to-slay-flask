@@ -23,19 +23,23 @@ class RollThreshold(NamedTuple):
         return roll <= self.value if self.condition == RollCondition.AT_MOST else roll >= self.value
 
 class ChoiceType(Enum):
-    CHOOSE_HERO_FROM_OPPONENT_PARTY       = auto()
-    CHOOSE_MODIFIER_OPTION                = auto()
-    CHOOSE_TARGET_PLAYER                  = auto()
-    CHOOSE_HERO_FROM_OWN_PARTY            = auto()
+    CHOOSE_HERO_FROM_OPPONENT_PARTY = auto()
+    CHOOSE_HERO_FROM_OWN_PARTY      = auto()
+    CHOOSE_TARGET_PLAYER            = auto()
+    CHOOSE_CARD_FROM_OWN_HAND       = auto()
+    CHOOSE_CARD_FROM_POOL           = auto()
+    CHOOSE_YES_NO                   = auto()
+    CHOOSE_NUMBER                   = auto()
 
 class GameEvent(Enum):
-    HERO_ROLL       = auto()
-    MAGIC_PLAYED    = auto()
-    CARD_DRAWN      = auto()
-    MONSTER_ATTACK  = auto()
-    CHALLENGE_ROLL  = auto()
-    MONSTER_SLAIN   = auto()
-    MODIFIER_PLAYED = auto()
+    HERO_ROLL           = auto()
+    MAGIC_PLAYED        = auto()
+    CARD_DRAWN          = auto()
+    MONSTER_ATTACK      = auto()
+    CHALLENGE_ROLL      = auto()
+    MONSTER_SLAIN       = auto()
+    MODIFIER_PLAYED     = auto()
+    SUCCESSFUL_HERO_ROLL= auto()
 
 class Phase(Enum):
     LOBBY            = auto()
@@ -117,6 +121,9 @@ class Hero(Card):
         if player.party_leader:
             player.party_leader.on_event(GameEvent.HERO_ROLL, game, player)
         if self.evaluate_roll(player.current_roll) == RollOutcome.WIN:
+            for party_card in player.party:
+                if isinstance(party_card, Monster):
+                    party_card.on_event(GameEvent.SUCCESSFUL_HERO_ROLL, game, player)
             self.use_ability(game, player)
         if game.phase == Phase.ROLL_PENDING:
             game.phase = Phase.ACTION
@@ -136,16 +143,21 @@ class Hero(Card):
         }
 class Monster(Card):
     card_type: CardType = CardType.MONSTER
-    def __init__(self, card_id: str, name: str, description: str, defeat: RollThreshold, fail: RollThreshold, party_requirement: PartyRequirement) -> None:
+    def __init__(self, card_id: str, name: str, description: str, defeat: RollThreshold, fail: RollThreshold, party_requirement: PartyRequirement, fail_description: str) -> None:
         super().__init__(card_id, name, description)
         self.defeat = defeat
         self.fail = fail
         self.party_requirement = party_requirement
-        
+        self.fail_description = fail_description
+    @abstractmethod
     def apply_failure(self, game: Game, player: Player) -> None:
         """
         Logic on what happens when the player fails to slay monster..
         """
+
+    def apply(self, game: Game, player: Player) -> None:
+        pass    
+
     def on_event(self, event: GameEvent, game: Game, player: Player) -> None:
         pass
     
@@ -214,7 +226,7 @@ class Leader(Card):
             "hero_class": self.hero_class,
         }
     def apply(self, game: Game, player: Player) -> None:
-        pass  # leaders are assigned at game start, not played from hand
+        pass
 
     def on_event(self, event: GameEvent, game: Game, player: Player) -> None:
         pass

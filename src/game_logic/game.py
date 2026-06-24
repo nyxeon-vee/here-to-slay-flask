@@ -14,6 +14,7 @@ class Game():
         self.monster_deck: List[Monster] = []
         self.monster_row: list[Monster] = []
         self.phase: Phase = Phase.LOBBY
+        self.target_card: Card | None = None
         self.current_player: Player | None = None
         self.pending_choice: ChoiceType | None = None
         self.pending_card: Card | None = None
@@ -22,6 +23,9 @@ class Game():
         self.target_player: Player | None = None
         self.target_hero: Hero | None = None
         self.choice: int | None = None
+        self.pending_choice_player: Player | None = None
+        self.pending_targets: list[Player] = []
+        self.collected_cards: list[Card] = []
 
     def _spend_ap(self, player: Player, amount: int) -> None:
         if player.action_points < amount:
@@ -190,6 +194,7 @@ class Game():
             player.add_to_party(monster)
             self.refill_monster_row()
         elif outcome == RollOutcome.LOSE:
+            monster.apply_failure(self, player)
             self.phase = Phase.AWAITING_CHOICE
             #The moster has code that decides what happens when you lose
             return

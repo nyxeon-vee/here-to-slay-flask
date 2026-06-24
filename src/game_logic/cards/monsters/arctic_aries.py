@@ -2,17 +2,18 @@ from game_logic.cards.registry import register
 from game_logic.base import GameEvent, Monster, RollThreshold, RollCondition, PartyRequirement
 from game_logic.game import Game, ChoiceType, Phase
 from game_logic.player import Player
-@register("abyss_queen")
-class AbyssQueen(Monster):
+
+@register("arctic_aries")
+class ArcticAries(Monster):
     def __init__(self):
         super().__init__(
-            card_id             = "abyss_queen",
-            name                = "Abyss Queen",
-            description         = "Each time another player plays a Modifier card on one of your rolls, +1 to your roll.",
-            defeat              = RollThreshold(8, RollCondition.AT_LEAST),
-            fail                = RollThreshold(5, RollCondition.AT_MOST),
+            card_id             = "artic_aries",
+            name                = "Artic Aries",
+            description         = "Each time you successfully roll to use a Hero's effect, DRAW a card.",
+            defeat              = RollThreshold(10, RollCondition.AT_LEAST),
+            fail                = RollThreshold(6, RollCondition.AT_MOST),
             fail_description    = "SACRIFICE a Hero card",
-            party_requirement   = PartyRequirement(2, tuple())
+            party_requirement   = PartyRequirement(1, tuple())
         )
     
     def apply_failure(self, game: Game, player: Player) -> None:
@@ -27,5 +28,5 @@ class AbyssQueen(Monster):
             game.pending_choice = None
 
     def on_event(self, event: GameEvent, game: Game, player: Player) -> None:
-        if event == GameEvent.MODIFIER_PLAYED:
-            player.current_roll += 1
+        if event == GameEvent.SUCCESSFUL_HERO_ROLL and game.deck:
+            player.draw(game.deck)
