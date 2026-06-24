@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING, NamedTuple
 if TYPE_CHECKING:
-    from game_logic.game import Game
+    from game_logic.game import Game, Phase
     from game_logic.player import Player
 from abc import ABC, abstractmethod
 from enum import Enum, auto
@@ -23,11 +23,19 @@ class RollThreshold(NamedTuple):
         return roll <= self.value if self.condition == RollCondition.AT_MOST else roll >= self.value
 
 class ChoiceType(Enum):
-    SACRIFICE_ANY_HERO       = auto()
-    SACRIFICE_HERO_OF_CLASS  = auto()
-    RETURN_HERO_TO_HAND      = auto()
-    CHOOSE_TARGET_PLAYER     = auto()
-    CHOOSE_HERO_FROM_PARTY   = auto()
+    CHOOSE_HERO_FROM_OPPONENT_PARTY       = auto()
+    CHOOSE_MODIFIER_OPTION                = auto()
+    CHOOSE_TARGET_PLAYER                  = auto()
+    CHOOSE_HERO_FROM_OWN_PARTY            = auto()
+
+class GameEvent(Enum):
+    HERO_ROLL       = auto()
+    MAGIC_PLAYED    = auto()
+    CARD_DRAWN      = auto()
+    MONSTER_ATTACK  = auto()
+    CHALLENGE_ROLL  = auto()
+    MONSTER_SLAIN   = auto()
+    MODIFIER_PLAYED = auto()
 
 class CardType(Enum):
     HERO      = "hero"
@@ -93,6 +101,18 @@ class Hero(Card):
     def add_item(self, item: Item) -> None:
         self.item = item
 
+    def apply(self, game: Game, player: Player) -> None:
+        player.hand.remove(self)
+        player.party.append(self)
+        game.phase = Phase.ROLL_PENDING 
+        game.roll_dice()
+        if player.party_leader:
+            player.party_leader.on_event(GameEvent.HERO_ROLL, game, player)
+        if self.evaluate_roll(game.current_roll) == RollOutcome.WIN:
+            self.use_ability(game, player)
+        if game.phase == Phase.ROLL_PENDING:
+            game.phase = Phase.ACTION
+        
     @abstractmethod
     def use_ability(self, game: Game, player: Player) -> None: ...
 
@@ -106,7 +126,6 @@ class Hero(Card):
             "activation_roll": {"value": self.activation_roll.value, "condition": self.activation_roll.condition.value},
             "item":            self.item.to_dict() if self.item else None,
         }
-    1
 class Monster(Card):
     card_type: CardType = CardType.MONSTER
     def __init__(self, card_id: str, name: str, description: str, defeat: RollThreshold, fail: RollThreshold, party_requirement: PartyRequirement) -> None:
@@ -184,3 +203,8 @@ class Leader(Card):
             **super().to_dict(),
             "hero_class": self.hero_class,
         }
+    def apply(self, game: Game, player: Player) -> None:
+        pass  # leaders are assigned at game start, not played from hand
+
+    def on_event(self, event: GameEvent, game: Game, player: Player) -> None:
+        pass

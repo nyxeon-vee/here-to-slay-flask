@@ -1,7 +1,7 @@
 from typing import List
 from player import Player
 from exceptions import CardNotInPartyError, InvalidPhaseError, PlayerNotEnoughActionPointsError, CardNotInHandError, PartyNotFulfillRequiermentError
-from base import Card, Leader, Hero, Monster, RollOutcome, Modifier, Challenge, ChoiceType
+from base import Card, Leader, Hero, Magic, Monster, RollOutcome, Modifier, Challenge, ChoiceType, GameEvent
 from enum import Enum, auto
 import random
 
@@ -28,6 +28,10 @@ class Game():
         self.pending_choice: ChoiceType | None = None
         self.pending_card: Card | None = None
         self.pending_player: Player | None = None
+        self.challenge_context: dict | None = None
+        self.target_player: Player | None = None
+        self.target_hero: Hero | None = None
+        self.choice: int | None = None
 
     def _spend_ap(self, player: Player, amount: int) -> None:
         if player.action_points < amount:
@@ -44,6 +48,43 @@ class Game():
         next_index = (current_index + 1) % len(self.players)
         self.current_player = self.players[next_index]
         self.start_turn(self.current_player)
+
+    def close_challenge_roll_1(self) -> None:
+        """Step 2: save challenger roll, challenged now rolls."""
+        ctx = self.challenge_context
+        ctx["challenger_roll"] = self.current_roll
+        challenged = ctx["challenged"]
+        self.current_roll = random.randint(1, 6) + random.randint(1, 6)
+        if challenged.party_leader:
+            challenged.party_leader.on_event(GameEvent.CHALLENGE_ROLL, self, challenged)
+        self.phase = Phase.ROLL_PENDING  # modifier window for challenged's roll
+
+    def close_challenge_roll_2(self) -> None:
+        """Step 3: compare and resolve."""
+        ctx = self.challenge_context
+        challenger_roll = ctx["challenger_roll"]
+        challenged_roll = self.current_roll
+        self.challenge_context = None
+
+        if challenger_roll >= challenged_roll:  # tie goes to challenger
+            self.discard_pile.append(self.pending_card)
+            self.pending_card = None
+            ctx["challenged"].action_points = max(0, ctx["challenged"].action_points - 1)
+            self.phase = Phase.ACTION
+        else:
+            self.resolve_pending_card()
+
+    def start_challenge(self, challenger: Player) -> None:
+        """Step 1: challenger rolls, open modifier window."""
+        self.challenge_context = {
+            "challenger": challenger,
+            "challenged": self.pending_player,
+            "challenger_roll": None,
+        }
+        self.current_roll = random.randint(1, 6) + random.randint(1, 6)
+        if challenger.party_leader:
+            challenger.party_leader.on_event(GameEvent.CHALLENGE_ROLL, self, challenger)
+        self.phase = Phase.ROLL_PENDING  # modifier window for challenger's roll
 
     def start_game(self) -> None:
         
@@ -73,27 +114,20 @@ class Game():
     def roll_dice(self) -> None:
         self.current_roll = random.randint(1, 6) + random.randint(1, 6)
 
-    def play_card(self, player: Player, card: Card,
-                target_player: Player | None = None,
-                target_hero: Hero | None = None,
-                choice: int | None = None) -> None:
-        
+    def play_card(self, player: Player, card: Card) -> None:
         if self.phase != Phase.ACTION:
             raise InvalidPhaseError("Can only play a card during action phase!")
         if player != self.current_player:
             raise InvalidPhaseError("It is not your turn!")
         if card not in player.hand:
             raise CardNotInHandError(f"{card!r} is not in {player.name}'s hand")
-        
         self._spend_ap(player, card.action_cost)
-        self.target_player = target_player
-        self.target_hero = target_hero
-        self.choice = choice
         self.phase = Phase.CHALLENGE_WINDOW
         self.pending_card = card
         self.pending_player = player
-        #await 
         self.resolve_pending_card()
+        if isinstance(card, Magic) and player.party_leader:
+            player.party_leader.on_event(GameEvent.MAGIC_PLAYED, self, player)
     
     def resolve_pending_card(self) -> None:
         if self.phase != Phase.CHALLENGE_WINDOW:
@@ -106,25 +140,27 @@ class Game():
         self.choice = None
         self.phase = Phase.ACTION
 
-    def play_modifier(self, player: Player, card: Modifier) -> None:
-
+    def play_modifier(self, player: Player, card: Modifier, choice: int = 0) -> None:
         if self.phase != Phase.ROLL_PENDING:
             raise InvalidPhaseError("Modifiers can only be played during a roll!")
+        if card.has_choice and choice not in (0, 1):
+            raise ValueError("Must choose option 0 or 1 for this modifier")
         if card not in player.hand:
             raise CardNotInHandError(f"{card!r} is not in {player.name}'s hand")
-        
-        self.current_roll += card.options[self.choice or 0]
+        self.current_roll += card.options[choice]
         self.discard_pile.append(card)
         player.hand.remove(card)
 
     def play_challenge(self, player: Player, card: Challenge) -> None:
-        if self.phase != Phase.ACTION:
-            raise InvalidPhaseError("Can only challenge during action phase!")
+        if self.phase != Phase.CHALLENGE_WINDOW:
+            raise InvalidPhaseError("Can only challenge during the challenge window!")
         if player == self.current_player:
             raise InvalidPhaseError("You cannot challenge your own action!")
         if card not in player.hand:
-            raise CardNotInHandError(...)
-        self._execute_card(player, card)
+            raise CardNotInHandError(f"{card!r} is not in {player.name}'s hand")
+        player.hand.remove(card)
+        self.discard_pile.append(card)
+        self.start_challenge(challenger=player)
 
     def attack_monster(self, player: Player, monster: Monster) -> None:
 
@@ -140,6 +176,8 @@ class Game():
         self._spend_ap(player, 2)
         self.phase = Phase.ROLL_PENDING
         self.roll_dice()
+        if player.party_leader:
+            player.party_leader.on_event(GameEvent.MONSTER_ATTACK, self, player)
         outcome: RollOutcome = monster.evaluate_roll(self.current_roll)
         if outcome == RollOutcome.WIN:
             self.monster_row.remove(monster)
