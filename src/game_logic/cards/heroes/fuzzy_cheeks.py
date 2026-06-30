@@ -1,8 +1,7 @@
 from game_logic.cards.registry import register
-from game_logic.base import Hero, HeroClass, RollThreshold, RollCondition, Challenge
+from game_logic.base import Hero, HeroClass, RollThreshold, RollCondition
 from game_logic.game import Game, Phase, ChoiceType
 from game_logic.player import Player
-import random
 @register("fuzzy_cheeks")
 class FuzzyCheeks(Hero):
     def __init__(self):
@@ -15,11 +14,15 @@ class FuzzyCheeks(Hero):
         )
 
     def use_ability(self, game: Game, player: Player) -> None:
+        # 1st call: draw a card, then ask which hand card to play for free.
         if game.pending_choice is None:
             player.draw(game.deck)
             game.pending_choice = ChoiceType.CHOOSE_CARD_FROM_OWN_HAND
             game.phase = Phase.AWAITING_CHOICE
             return
+        # 2nd call: clear the scratchpad FIRST, then play the chosen hero. Order
+        # matters — _execute_card runs another hero's apply(), which reuses these
+        # same game.target_*/pending_choice fields, so they must be reset before.
         chosen = game.target_card
         game.target_card = None
         game.pending_choice = None

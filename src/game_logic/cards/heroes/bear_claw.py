@@ -15,16 +15,18 @@ class BearClaw(Hero):
         )
 
     def use_ability(self, game: Game, player: Player) -> None:
-        
+        # 1st call: ask which opponent to steal from.
         if game.target_player is None:
             game.pending_choice = ChoiceType.CHOOSE_TARGET_PLAYER
             game.phase = Phase.AWAITING_CHOICE
             return
 
+        # 2nd call: a target is chosen. Pull a random card from their hand...
         first_card = random.choice(game.target_player.hand)
         game.target_player.hand.remove(first_card)
         player.hand.append(first_card)
 
+        # ...and if it was a Hero, pull a second random card too.
         if isinstance(first_card, Hero) and game.target_player.hand:
             second_card = random.choice(game.target_player.hand)
             game.target_player.hand.remove(second_card)

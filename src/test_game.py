@@ -42,6 +42,8 @@ class StubMonster(Monster):
         )
     def apply(self, game, player):
         pass
+    def apply_failure(self, game, player):
+        pass  # never reached (never fails), but apply_failure is abstract
 
 
 class StubLeader(Leader):

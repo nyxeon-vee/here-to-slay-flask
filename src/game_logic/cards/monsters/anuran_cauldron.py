@@ -4,6 +4,9 @@ from game_logic.game import Game, ChoiceType, Phase
 from game_logic.player import Player
 
 
+# "Each time you roll" = any of the three roll kinds. We match on this set
+# instead of adding a separate generic ROLL event, so this monster reacts to all
+# of them without the engine needing a new event type.
 _ROLL_EVENTS: frozenset = frozenset({GameEvent.HERO_ROLL, GameEvent.MONSTER_ATTACK, GameEvent.CHALLENGE_ROLL})
 
 @register("anuran_cauldron")
@@ -19,6 +22,7 @@ class AnuranCauldron(Monster):
             party_requirement   = PartyRequirement(3, tuple())
         )
     
+    # Failure penalty: sacrifice a hero (same re-entrant shape as Arctic Aries).
     def apply_failure(self, game: Game, player: Player) -> None:
         if game.pending_choice is None:
             game.pending_choice = ChoiceType.CHOOSE_HERO_FROM_OWN_PARTY
@@ -30,6 +34,7 @@ class AnuranCauldron(Monster):
             game.target_hero = None
             game.pending_choice = None
 
+    # Passive: +1 to any roll this player makes while this monster is in party.
     def on_event(self, event: GameEvent, game: Game, player: Player) -> None:
         if event in _ROLL_EVENTS:
             player.current_roll += 1

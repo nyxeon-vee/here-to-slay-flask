@@ -12,6 +12,8 @@ class TheDivineArrow(Leader):
             hero_class      = HeroClass.RANGER,
         )
 
+    # Passive: +1 to every roll made to attack a Monster. Fired by
+    # attack_monster right after the dice land.
     def on_event(self, event: GameEvent, game: Game, player: Player) -> None:
         if event == GameEvent.MONSTER_ATTACK:
             player.current_roll += 1

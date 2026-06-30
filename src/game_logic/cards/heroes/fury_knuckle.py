@@ -15,6 +15,8 @@ class FuryKnuckle(Hero):
         )
 
     def use_ability(self, game: Game, player: Player) -> None:
+        # Same shape as Bear Claw, but the bonus pull triggers on a Challenge
+        # card instead of a Hero. 1st call asks for a target; 2nd call steals.
         if game.target_player is None:
             game.pending_choice = ChoiceType.CHOOSE_TARGET_PLAYER
             game.phase = Phase.AWAITING_CHOICE

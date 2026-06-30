@@ -15,6 +15,7 @@ class AbyssQueen(Monster):
             party_requirement   = PartyRequirement(2, tuple())
         )
     
+    # Failure penalty: sacrifice a hero (same re-entrant shape as Arctic Aries).
     def apply_failure(self, game: Game, player: Player) -> None:
         if game.pending_choice is None:
             game.pending_choice = ChoiceType.CHOOSE_HERO_FROM_OWN_PARTY
@@ -26,6 +27,9 @@ class AbyssQueen(Monster):
             game.target_hero = None
             game.pending_choice = None
 
+    # Passive: when an OPPONENT plays a Modifier on your roll, +1. play_modifier
+    # only fires MODIFIER_PLAYED when someone else modifies your roll, so the
+    # "another player" condition is already handled there — no check needed here.
     def on_event(self, event: GameEvent, game: Game, player: Player) -> None:
         if event == GameEvent.MODIFIER_PLAYED:
             player.current_roll += 1

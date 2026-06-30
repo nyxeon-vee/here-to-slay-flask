@@ -1,6 +1,6 @@
 from game_logic.cards.registry import register
-from game_logic.base import Hero, HeroClass, RollThreshold, RollCondition, ChoiceType
-from game_logic.game import Game, Phase
+from game_logic.base import Hero, HeroClass, RollThreshold, RollCondition
+from game_logic.game import Game, Phase, ChoiceType
 from game_logic.player import Player
 
 @register("beary_wise")
@@ -15,7 +15,16 @@ class BearyWise(Hero):
         )
 
     def use_ability(self, game: Game, player: Player) -> None:
+        # Two-phase, multi-player ability. It's re-entered once per opponent and
+        # then once more for the active player:
+        #   pending_targets       = the opponents still to discard (a work queue)
+        #   pending_choice_player = WHO the UI should prompt right now
+        #   collected_cards       = the pool of discarded cards to choose from
+        # Phase A (CHOOSE_CARD_FROM_OWN_HAND): walk the queue, each opponent
+        #   discards one card into the pool. Phase B (CHOOSE_CARD_FROM_POOL): the
+        #   active player keeps one from the pool; the rest hit the discard pile.
         if game.pending_choice is None:
+            # First entry: build the queue of opponents who actually have cards.
             game.pending_targets = [p for p in game.players if p is not player and p.hand]
             game.collected_cards = []
             game.pending_choice = ChoiceType.CHOOSE_CARD_FROM_OWN_HAND

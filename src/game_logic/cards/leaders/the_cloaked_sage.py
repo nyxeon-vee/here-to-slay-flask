@@ -12,6 +12,8 @@ class TheCloakedSage(Leader):
             hero_class      = HeroClass.WIZARD,
         )
 
+    # Passive: draw a card each time you play a Magic card. Fired by play_card
+    # after the magic resolves.
     def on_event(self, event: GameEvent, game: Game, player: Player) -> None:
-            if event == GameEvent.MAGIC_PLAYED:
-                player.draw(game.deck)
+        if event == GameEvent.MAGIC_PLAYED:
+            player.draw(game.deck)

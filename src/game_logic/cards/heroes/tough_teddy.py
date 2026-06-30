@@ -1,6 +1,6 @@
 from game_logic.cards.registry import register
-from game_logic.base import Hero, HeroClass, RollThreshold, RollCondition, ChoiceType
-from game_logic.game import Game, Phase
+from game_logic.base import Hero, HeroClass, RollThreshold, RollCondition
+from game_logic.game import Game, Phase, ChoiceType
 from game_logic.player import Player
 
 @register("tough_teddy")
@@ -15,7 +15,12 @@ class ToughTeddy(Hero):
         )
 
     def use_ability(self, game: Game, player: Player) -> None:
+        # Multi-player queue (like Beary Wise, but simpler — discards just go to
+        # the pile, no pool to pick from). Re-entered once per affected opponent.
         if game.pending_choice is None:
+            # Build the queue: opponents who have a Fighter in their party AND a
+            # card to discard. (isinstance(c, Hero) guards against Monsters in
+            # the party, which have no hero_class.)
             game.pending_targets = [
                 p for p in game.players
                 if p is not player

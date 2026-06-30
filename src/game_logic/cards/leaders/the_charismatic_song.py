@@ -12,6 +12,8 @@ class TheCharismaticSong(Leader):
             hero_class      = HeroClass.BARD,
         )
 
+    # Passive: +1 to every roll made to activate a Hero. Fired by Hero.apply
+    # right after the dice land, before the roll is evaluated.
     def on_event(self, event: GameEvent, game: Game, player: Player) -> None:
         if event == GameEvent.HERO_ROLL:
             player.current_roll += 1

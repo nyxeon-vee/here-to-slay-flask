@@ -14,6 +14,9 @@ class BadAxe(Hero):
         )
 
     def use_ability(self, game: Game, player: Player) -> None:
+        # Simplest re-entrant ability (one question):
+        #  1st call  -> no target picked yet, so open the prompt and bail.
+        #  2nd call  -> target_player/target_hero now filled in; destroy the hero.
         if game.target_player is None or game.target_hero is None:
             game.pending_choice = ChoiceType.CHOOSE_HERO_FROM_OPPONENT_PARTY
             game.phase = Phase.AWAITING_CHOICE
@@ -21,5 +24,5 @@ class BadAxe(Hero):
         target_hero = game.target_hero
         game.target_player.remove_from_party(target_hero)
         game.discard_pile.append(target_hero)
-        game.target_player = None
+        game.target_player = None   # clear the scratchpad for the next ability
         game.target_hero = None

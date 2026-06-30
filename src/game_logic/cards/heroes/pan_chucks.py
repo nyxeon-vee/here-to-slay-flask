@@ -2,7 +2,6 @@ from game_logic.cards.registry import register
 from game_logic.base import Hero, HeroClass, RollThreshold, RollCondition, Challenge
 from game_logic.game import Game, Phase, ChoiceType
 from game_logic.player import Player
-import random
 @register("pan_chucks")
 class PanChucks(Hero):
     def __init__(self):
@@ -15,26 +14,32 @@ class PanChucks(Hero):
         )
 
     def use_ability(self, game: Game, player: Player) -> None:
+        # Up to three entries: draw -> (maybe) reveal yes/no -> (maybe) destroy.
+        # 1st call: draw 2. If neither is a Challenge, the bonus can't happen, so
+        # we're simply done (no AWAITING_CHOICE, ability ends here).
         if game.pending_choice is None:
             player.draw(game.deck)
             player.draw(game.deck)
             drawn = player.hand[-2:]
             if not any(isinstance(c, Challenge) for c in drawn):
-                return 
+                return
             game.pending_choice = ChoiceType.CHOOSE_YES_NO
             game.phase = Phase.AWAITING_CHOICE
             return
 
+        # 2nd call: player answered yes/no to "reveal and destroy a hero?".
         if game.pending_choice == ChoiceType.CHOOSE_YES_NO:
-            if game.choice != 0:
+            if game.choice != 0:  # chose "no" -> stop, keep the cards
                 game.choice = None
                 game.pending_choice = None
                 return
+            # Chose "yes": switch the open prompt to picking the hero to destroy.
             game.choice = None
             game.pending_choice = ChoiceType.CHOOSE_HERO_FROM_OPPONENT_PARTY
             if game.target_player is None or game.target_hero is None:
                 game.phase = Phase.AWAITING_CHOICE
                 return
+        # 3rd call: a hero is targeted -> destroy it.
         target_hero = game.target_hero
         game.target_player.remove_from_party(target_hero)
         game.discard_pile.append(target_hero)
