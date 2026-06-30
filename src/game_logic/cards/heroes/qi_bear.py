@@ -22,6 +22,14 @@ class QiBear(Hero):
         # 1st call: ask HOW MANY pairs to do (0–3). Stored in game.choice and
         # used below as a countdown.
         if game.pending_choice is None:
+            # Guard: if no opponent has a hero to destroy the ability can't do
+            # anything meaningful — skip asking for a number entirely.
+            if not any(
+                any(isinstance(c, Hero) for c in p.party)
+                for p in game.players if p is not player
+            ):
+                game.pending_choice = None
+                return
             game.pending_choice = ChoiceType.CHOOSE_NUMBER
             game.phase = Phase.AWAITING_CHOICE
             return
@@ -35,6 +43,17 @@ class QiBear(Hero):
                 game.phase = Phase.AWAITING_CHOICE
                 return
             if game.target_hero is None:
+                # Guard: a previous pair may have destroyed the last opponent
+                # hero — don't softlock on CHOOSE_HERO_FROM_OPPONENT_PARTY if
+                # there are none left. Clear the chosen card (it was never
+                # actually discarded yet — discard happens atomically in step 3)
+                # and stop the remaining pairs.
+                if not any(
+                    any(isinstance(c, Hero) for c in p.party)
+                    for p in game.players if p is not player
+                ):
+                    game.target_card = None
+                    break
                 game.pending_choice = ChoiceType.CHOOSE_HERO_FROM_OPPONENT_PARTY
                 game.phase = Phase.AWAITING_CHOICE
                 return

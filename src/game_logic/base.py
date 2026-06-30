@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from game_logic.player import Player
 from abc import ABC, abstractmethod
 from enum import Enum, auto
+import uuid
 
 class RollCondition(Enum):
     AT_LEAST = "at_least"
@@ -51,6 +52,7 @@ class RollThreshold(NamedTuple):
 class ChoiceType(Enum):
     CHOOSE_HERO_FROM_OPPONENT_PARTY = auto()  # answer -> game.target_player + game.target_hero
     CHOOSE_HERO_FROM_OWN_PARTY      = auto()  # answer -> game.target_hero
+    CHOOSE_HERO_FROM_ANY_PARTY      = auto()  # anwser -> game.target_hero
     CHOOSE_TARGET_PLAYER            = auto()  # answer -> game.target_player
     CHOOSE_CARD_FROM_OWN_HAND       = auto()  # answer -> game.target_card
     CHOOSE_CARD_FROM_POOL           = auto()  # pick from game.collected_cards -> game.target_card
@@ -60,15 +62,15 @@ class ChoiceType(Enum):
 # Passive-ability triggers. Game fires these at the relevant moment via
 # leader/monster.on_event(); a card's on_event checks the event and reacts.
 class GameEvent(Enum):
-    HERO_ROLL           = auto()  # player rolled to activate a Hero
-    MAGIC_PLAYED        = auto()  # player played a Magic card
-    CARD_DRAWN          = auto()
-    MONSTER_ATTACK      = auto()  # player rolled to slay a Monster
-    CHALLENGE_ROLL      = auto()  # player rolled as part of a challenge
-    MONSTER_SLAIN       = auto()
-    MODIFIER_PLAYED     = auto()  # a Modifier was played on someone's roll
-    SUCCESSFUL_HERO_ROLL= auto()  # a Hero roll succeeded (fires on party monsters)
-
+    HERO_ROLL               = auto()  # player rolled to activate a Hero
+    MAGIC_PLAYED            = auto()  # player played a Magic card
+    CARD_DRAWN              = auto()
+    MONSTER_ATTACK          = auto()  # player rolled to slay a Monster
+    CHALLENGE_ROLL          = auto()  # player rolled as part of a challenge
+    MONSTER_SLAIN           = auto()
+    MODIFIER_PLAYED         = auto()  # a Modifier was played on someone's roll
+    SUCCESSFUL_HERO_ROLL    = auto()  # a Hero roll succeeded (fires on party monsters)
+    UNSUCCESSFUL_HERO_ROLL  = auto()  # a Hero roll unsucceeded (fires on item)
 # The single source of truth for "what is the game waiting for right now".
 # Every public Game method guards on this, so illegal actions raise instead of
 # corrupting state. Rough flow: ACTION -> (play card) -> CHALLENGE_WINDOW ->
@@ -118,7 +120,8 @@ class Card(ABC):
     card_type: CardType
     action_cost: int = 1
     def __init__(self, card_id: str, name: str, description: str) -> None:
-        self.card_id = card_id
+        self.card_id = card_id          # the card's TYPE (shared by every copy)
+        self.uid = uuid.uuid4().hex     # this physical copy's unique id (for targeting)
         self.name = name
         self.description = description
         super().__init__()
@@ -129,6 +132,7 @@ class Card(ABC):
 
     def to_dict(self) -> dict:
         return {
+            "uid":         self.uid,
             "card_id":     self.card_id,
             "name":        self.name,
             "description": self.description,
@@ -151,18 +155,27 @@ class Hero(Card):
         self.item = item
 
     def apply(self, game: Game, player: Player) -> None:
-        """Template method: the shared 'play a Hero' sequence.
+        """Template method: the shared 'play a Hero from hand' sequence.
 
-        Every hero goes through the same steps — only use_ability() differs — so
-        the base class owns the flow and subclasses never touch it:
-          1. move the card from hand into the party
-          2. roll the dice (stored on player.current_roll)
-          3. let the leader's passive bump the roll (HERO_ROLL event)
-          4. if the roll clears the activation threshold, fire the on-success
-             passives, then run this hero's own ability
+        Moves the card into the party, then delegates the roll + ability to
+        roll_and_activate so the same logic is reused when activating a party hero.
         """
         player.hand.remove(self)
         player.party.append(self)
+        self.roll_and_activate(game, player)
+
+    def roll_and_activate(self, game: Game, player: Player) -> None:
+        """Roll for this hero and run its ability on success.
+
+        Shared by apply() (hero played from hand) and use_party_ability() (hero
+        already in the party). Both paths need the same roll / leader bonus /
+        item-on-failure sequence, so it lives here instead of in game.py.
+
+          1. roll the dice (stored on player.current_roll)
+          2. let the leader's passive bump the roll (HERO_ROLL event)
+          3a. WIN  -> fire SUCCESSFUL_HERO_ROLL on party monsters, then use_ability
+          3b. LOSE -> fire UNSUCCESSFUL_HERO_ROLL on the equipped item (if any)
+        """
         game.phase = Phase.ROLL_PENDING
         game.roll_dice(player)
         if player.party_leader:
@@ -174,6 +187,12 @@ class Hero(Card):
                 if isinstance(party_card, Monster):
                     party_card.on_event(GameEvent.SUCCESSFUL_HERO_ROLL, game, player)
             self.use_ability(game, player)
+        else:
+            # Failed roll: the item EQUIPPED TO THIS HERO reacts, if any. The item
+            # lives on self (the rolling hero), so there's no party to search —
+            # Particularly Rusty Coin draws a card here.
+            if self.item is not None:
+                self.item.on_event(GameEvent.UNSUCCESSFUL_HERO_ROLL, game, player)
         # Only auto-advance to ACTION if the ability didn't park us somewhere
         # else (a multi-step ability sets phase to AWAITING_CHOICE and we must
         # leave it there until the player answers and use_ability is re-called).
@@ -258,6 +277,13 @@ class Item(Card):
     def __init__(self, card_id: str, name: str, description: str, is_cursed: bool = False,) -> None:
         super().__init__(card_id, name, description)
         self.is_cursed = is_cursed
+
+    def on_event(self, event: GameEvent, game: Game, player: Player) -> None:
+        # Default: ignore events. An item equipped to a hero (e.g. Particularly
+        # Rusty Coin) overrides this to react to that hero's rolls. No-op so
+        # Hero.apply can call self.item.on_event blindly.
+        pass
+
     def to_dict(self):
         return {
             **super().to_dict(),
@@ -270,7 +296,6 @@ class Magic(Card):
         super().__init__(card_id, name, description)
     
 class Modifier(Card):
-    action_cost = 0
     card_type: CardType = CardType.MODIFIER
 
     def __init__(self, card_id: str, name: str, description: str, options: tuple[int, ...]) -> None:
@@ -288,7 +313,6 @@ class Modifier(Card):
         }
 
 class Challenge(Card):
-    action_cost = 0
     card_type: CardType = CardType.CHALLENGE
     def __init__(self, card_id: str, name: str, description: str) -> None:
         super().__init__(card_id, name, description)
@@ -301,7 +325,7 @@ class Leader(Card):
     def to_dict(self):
         return {
             **super().to_dict(),
-            "hero_class": self.hero_class,
+            "hero_class": self.hero_class.value,   # .value — the enum itself isn't JSON serializable
         }
     def apply(self, game: Game, player: Player) -> None:
         # Leaders are assigned at game start, never played from hand — no-op.

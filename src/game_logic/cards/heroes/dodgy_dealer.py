@@ -23,3 +23,4 @@ class DodgyDealer(Hero):
         # 2nd call: swap the two hand lists in one tuple-assignment.
         player.hand, game.target_player.hand = game.target_player.hand, player.hand
         game.target_player = None
+        game.pending_choice = None  # signal "done" so submit_choice finalizes

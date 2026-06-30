@@ -117,7 +117,9 @@ separator("TEST 3: Play StubHero (always succeeds, 2+ roll)")
 hero_card = next(c for c in alice.hand if isinstance(c, StubHero))
 ap_before = alice.action_points
 print(f"  Playing {hero_card.name}...")
-game.play_card(alice, hero_card)
+game.play_card(alice, hero_card)        # opens the challenge window (no resolve yet)
+assert_phase(game, Phase.CHALLENGE_WINDOW)
+game.resolve_pending_card()             # simulate the window expiring with no challenge
 print(f"  Alice rolled: {alice.current_roll}")
 assert hero_card in alice.party, "Hero should be in party"
 assert hero_card not in alice.hand, "Hero should be out of hand"
@@ -188,7 +190,8 @@ hero_card = next(c for c in carol.hand if isinstance(c, StubHero))
 
 import random
 random.seed(42)
-game2.play_card(carol, hero_card)
+game2.play_card(carol, hero_card)       # opens challenge window
+game2.resolve_pending_card()            # window expires -> hero resolves & rolls
 roll = carol.current_roll
 print(f"  Roll with Charismatic Song leader: {roll}")
 print(f"  (base roll + 1 from leader)")
@@ -241,6 +244,48 @@ print(f"  Eve rolled: {eve.current_roll}")
 game3.close_challenge_roll_2()
 winner = "Finn" if finn.current_roll >= eve.current_roll else "Eve"
 print(f"  Result: {winner} wins (Finn={finn.current_roll}, Eve={eve.current_roll})")
+print("  PASS")
+
+
+# ── Test 9: Challenge FAILS -> the played card resolves ───────────────────────
+
+separator("TEST 9: Failed challenge lets the card through")
+
+game4 = Game()
+gwen = Player("p7", "Gwen"); hank = Player("p8", "Hank")
+game4.add_player(gwen); game4.add_player(hank)
+game4.current_player = gwen
+hero9 = StubHero("Hero9"); gwen.hand.append(hero9)
+game4.phase = Phase.CHALLENGE_WINDOW
+game4.pending_card = hero9; game4.pending_player = gwen
+
+game4.start_challenge(hank); hank.current_roll = 2     # challenger rolls low...
+game4.close_challenge_roll_1(); gwen.current_roll = 12  # ...challenged rolls high
+game4.close_challenge_roll_2()                          # challenger LOSES
+assert hero9 in gwen.party and hero9 not in gwen.hand, "card should resolve into party"
+assert_phase(game4, Phase.ACTION)
+print("  challenger lost -> hero resolved into party ✓")
+print("  PASS")
+
+
+# ── Test 10: Won challenge cancels the card (out of hand, into discard) ────────
+
+separator("TEST 10: Won challenge cancels the card")
+
+game5 = Game()
+ivy = Player("p9", "Ivy"); jack = Player("p10", "Jack")
+game5.add_player(ivy); game5.add_player(jack)
+game5.current_player = ivy
+hero10 = StubHero("Hero10"); ivy.hand.append(hero10)
+game5.phase = Phase.CHALLENGE_WINDOW
+game5.pending_card = hero10; game5.pending_player = ivy
+
+game5.start_challenge(jack); jack.current_roll = 12    # challenger high...
+game5.close_challenge_roll_1(); ivy.current_roll = 2   # ...challenged low
+game5.close_challenge_roll_2()                          # challenger WINS
+assert hero10 not in ivy.hand and hero10 not in ivy.party
+assert hero10 in game5.discard_pile
+print("  challenger won -> card removed from hand + discarded, never played ✓")
 print("  PASS")
 
 

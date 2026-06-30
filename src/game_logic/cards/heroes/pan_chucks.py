@@ -35,6 +35,14 @@ class PanChucks(Hero):
                 return
             # Chose "yes": switch the open prompt to picking the hero to destroy.
             game.choice = None
+            # Guard: even if the player said yes, there might be no opponent
+            # heroes to target — skip the prompt so the game doesn't softlock.
+            if not any(
+                any(isinstance(c, Hero) for c in p.party)
+                for p in game.players if p is not player
+            ):
+                game.pending_choice = None
+                return
             game.pending_choice = ChoiceType.CHOOSE_HERO_FROM_OPPONENT_PARTY
             if game.target_player is None or game.target_hero is None:
                 game.phase = Phase.AWAITING_CHOICE

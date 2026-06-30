@@ -18,8 +18,16 @@ class FuryKnuckle(Hero):
         # Same shape as Bear Claw, but the bonus pull triggers on a Challenge
         # card instead of a Hero. 1st call asks for a target; 2nd call steals.
         if game.target_player is None:
+            if not any(p.hand for p in game.players if p is not player):
+                game.pending_choice = None
+                return
             game.pending_choice = ChoiceType.CHOOSE_TARGET_PLAYER
             game.phase = Phase.AWAITING_CHOICE
+            return
+
+        if not game.target_player.hand:
+            game.target_player = None
+            game.pending_choice = None
             return
 
         first_card = random.choice(game.target_player.hand)
@@ -32,3 +40,4 @@ class FuryKnuckle(Hero):
             player.hand.append(second_card)
 
         game.target_player = None
+        game.pending_choice = None  # signal "done" so submit_choice finalizes

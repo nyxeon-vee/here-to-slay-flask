@@ -18,6 +18,15 @@ class BadAxe(Hero):
         #  1st call  -> no target picked yet, so open the prompt and bail.
         #  2nd call  -> target_player/target_hero now filled in; destroy the hero.
         if game.target_player is None or game.target_hero is None:
+            # Guard: if no opponent has a hero in their party, the ability can't
+            # do anything — skip the prompt entirely so the game doesn't softlock.
+            no_targets = not any(
+                any(isinstance(c, Hero) for c in p.party)
+                for p in game.players if p is not player
+            )
+            if no_targets:
+                game.pending_choice = None
+                return
             game.pending_choice = ChoiceType.CHOOSE_HERO_FROM_OPPONENT_PARTY
             game.phase = Phase.AWAITING_CHOICE
             return
@@ -26,3 +35,4 @@ class BadAxe(Hero):
         game.discard_pile.append(target_hero)
         game.target_player = None   # clear the scratchpad for the next ability
         game.target_hero = None
+        game.pending_choice = None  # signal "done" so submit_choice finalizes

@@ -56,6 +56,12 @@ class Game():
         self.pending_targets: list[Player] = []           # queue for "each player must..." effects
         self.collected_cards: list[Card] = []             # temporary pool to pick from
 
+        # ── Re-entry bookmark ────────────────────────────────────────────────
+        #    When an effect pauses (phase == AWAITING_CHOICE) this records WHAT
+        #    to re-run once the answer arrives: (kind, card, player). submit_choice
+        #    reads it to resume the exact method that paused. None when not paused.
+        self.paused: tuple[str, Card, Player] | None = None
+
     def _spend_ap(self, player: Player, amount: int) -> None:
         # Charge action points for a move, refusing if the player can't afford it.
         if player.action_points < amount:
@@ -131,15 +137,21 @@ class Game():
         self.challenge_context = None
 
         if challenger.current_roll >= challenged.current_roll:  # tie goes to challenger
-            # Challenge succeeds: the played card is cancelled (discarded, never
-            # resolved) and the challenged player loses an action point.
+            # Challenge succeeds: the card is cancelled. It was committed to the
+            # table but never resolved, so it's still in the player's hand — pull
+            # it out and discard it, then dock the player an action point.
             assert self.pending_card is not None  # invariant: set while a challenge runs
+            if self.pending_card in challenged.hand:
+                challenged.hand.remove(self.pending_card)
             self.discard_pile.append(self.pending_card)
             self.pending_card = None
             challenged.action_points = max(0, challenged.action_points - 1)
             self.phase = Phase.ACTION
         else:
-            # Challenge fails: the card goes through as if never challenged.
+            # Challenge fails: the card resolves as if never challenged. We came
+            # in via ROLL_PENDING, so re-enter the challenge window first —
+            # resolve_pending_card insists on it.
+            self.phase = Phase.CHALLENGE_WINDOW
             self.resolve_pending_card()
 
     def start_game(self) -> None:
@@ -174,10 +186,12 @@ class Game():
         player.current_roll = random.randint(1, 6) + random.randint(1, 6)
 
     def play_card(self, player: Player, card: Card) -> None:
-        # Spend the cost, then move into the challenge window. NOTE: this
-        # currently resolves the card immediately; once opponents can actually
-        # challenge, the resolve_pending_card() call moves out to the moment the
-        # challenge window closes (or a challenge is declined).
+        # Commit the card to the table and OPEN the challenge window. The card is
+        # deliberately NOT resolved yet — opponents get a chance to challenge.
+        # The socket layer times the window: if it expires with no challenge it
+        # calls resolve_pending_card(); a challenge instead calls play_challenge().
+        # (The MAGIC_PLAYED leader passive now fires in _on_card_resolved, i.e.
+        # only once the card actually resolves — not if it's challenged away.)
         if self.phase != Phase.ACTION:
             raise InvalidPhaseError("Can only play a card during action phase!")
         if player != self.current_player:
@@ -188,23 +202,80 @@ class Game():
         self.phase = Phase.CHALLENGE_WINDOW
         self.pending_card = card
         self.pending_player = player
-        self.resolve_pending_card()
-        # Leader passive: The Cloaked Sage draws a card whenever you play Magic.
-        if isinstance(card, Magic) and player.party_leader:
-            player.party_leader.on_event(GameEvent.MAGIC_PLAYED, self, player)
 
     def resolve_pending_card(self) -> None:
-        # Run the pending card's effect and clear the per-card scratchpad.
-        # Also called by close_challenge_roll_2 when a challenge fails.
+        # Run the pending card's effect. Also called by close_challenge_roll_2
+        # when a challenge fails.
         if self.phase != Phase.CHALLENGE_WINDOW:
             raise InvalidPhaseError("")
+        assert self.pending_card is not None and self.pending_player is not None  # set by play_card
         self._execute_card(self.pending_player, self.pending_card)
+        # If the effect needs player input it pauses by leaving the phase at
+        # AWAITING_CHOICE. Don't tidy up — record HOW to resume it (a Hero is
+        # resumed via use_ability, a Magic via apply) and bail; submit_choice
+        # finishes the job later. Otherwise it completed synchronously: clean up.
+        if self.phase == Phase.AWAITING_CHOICE:
+            kind = "hero_play" if isinstance(self.pending_card, Hero) else "magic_play"
+            self.paused = (kind, self.pending_card, self.pending_player)
+            return
+        self._on_card_resolved()
+
+    def _on_card_resolved(self) -> None:
+        # A played card has FULLY resolved (not challenged away, not still paused
+        # on a choice). Fire "card played" leader passives at THIS moment — e.g.
+        # The Cloaked Sage draws on a resolved Magic. Firing here rather than at
+        # play time is the fix for the old bug where the draw happened the instant
+        # a magic paused for input, or even if a challenge later cancelled it.
+        card, player = self.pending_card, self.pending_player
+        if isinstance(card, Magic) and player and player.party_leader:
+            player.party_leader.on_event(GameEvent.MAGIC_PLAYED, self, player)
+        self._clear_pending_card()
+
+    def _clear_pending_card(self) -> None:
+        # Wipe the per-card scratchpad and hand control back to the active player.
         self.pending_card = None
         self.pending_player = None
         self.target_player = None
         self.target_hero = None
         self.choice = None
         self.phase = Phase.ACTION
+
+    def submit_choice(self) -> None:
+        """Resume a paused effect after the UI has filled in the answer.
+
+        The socket layer writes the player's answer into the scratchpad
+        (target_player / target_hero / target_card / choice) and then calls this.
+        We re-run whichever method paused, using the bookmark left in self.paused:
+
+          hero_play / party_ability -> the hero's use_ability
+          magic_play                -> the magic card's apply
+          monster_failure           -> the monster's apply_failure
+
+        Re-entrant effects signal completion by clearing pending_choice (None).
+        If it's still set, the effect paused AGAIN for another answer (e.g. a
+        multi-player discard) — we stay in AWAITING_CHOICE and wait for the next
+        submit_choice. Only when it's truly done do we finalize.
+        """
+        if self.phase != Phase.AWAITING_CHOICE or self.paused is None:
+            raise InvalidPhaseError("No choice is pending")
+
+        kind, card, player = self.paused
+        if kind in ("hero_play", "party_ability"):
+            card.use_ability(self, player)   # type: ignore[attr-defined]  # Hero
+        elif kind == "magic_play":
+            card.apply(self, player)
+        elif kind == "monster_failure":
+            card.apply_failure(self, player)  # type: ignore[attr-defined]  # Monster
+
+        if self.pending_choice is not None:
+            return  # effect paused again; keep self.paused and wait for next answer
+
+        # Effect finished. Drop the bookmark and return control to the turn.
+        self.paused = None
+        if kind in ("hero_play", "magic_play"):
+            self._on_card_resolved()      # fires MAGIC_PLAYED + clears pending_card
+        else:
+            self.phase = Phase.ACTION
 
     def play_modifier(self, player: Player, card: Modifier, choice: int = 0) -> None:
         # Modifiers adjust a roll that just happened (the ROLL_PENDING window).
@@ -266,10 +337,11 @@ class Game():
             self.refill_monster_row()
         elif outcome == RollOutcome.LOSE:
             # The monster decides the penalty; it may need player input (pick a
-            # hero to sacrifice), so it can leave us in AWAITING_CHOICE.
+            # hero to sacrifice). If it paused, bookmark the resume and wait.
             monster.apply_failure(self, player)
-            self.phase = Phase.AWAITING_CHOICE
-            return
+            if self.pending_choice is not None:
+                self.paused = ("monster_failure", monster, player)
+                return
         self.phase = Phase.ACTION
 
     def use_party_ability(self, player: Player, card: Hero) -> None:
@@ -282,7 +354,11 @@ class Game():
         if card not in player.party:
             raise CardNotInPartyError
         self._spend_ap(player, card.action_cost)
-        card.use_ability(self, player)
+        card.roll_and_activate(self, player)
+        # If the roll succeeded but the ability paused for input, bookmark how
+        # to resume it. A failed roll never pauses (items react synchronously).
+        if self.pending_choice is not None:
+            self.paused = ("party_ability", card, player)
 
     def discard_all_cards(self, player: Player) -> None:
         # The "mulligan" move: pay 3 AP to dump your whole hand and draw 5 fresh.

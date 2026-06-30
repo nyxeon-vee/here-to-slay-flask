@@ -1,0 +1,124 @@
+/* Here to Slay — minimal table styling. Cards are simple name+description boxes. */
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  background: #143020;          /* table felt */
+  color: #eef2ee;
+}
+
+.screen { padding: 20px; }
+.hidden { display: none !important; }
+
+h1, h2, h3 { margin: 0 0 8px; }
+h2 { font-size: 1.05rem; color: #bfe3c8; }
+h3 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: .05em; color: #8fbf9c; }
+
+/* ── Join / lobby panels ─────────────────────────────────────────────────── */
+.panel {
+  max-width: 420px;
+  margin: 8vh auto;
+  background: #1d3f2b;
+  border: 1px solid #2f5d40;
+  border-radius: 12px;
+  padding: 24px;
+}
+.panel label { display: block; margin: 12px 0; font-size: .9rem; }
+.panel input {
+  width: 100%; margin-top: 4px; padding: 8px;
+  border: 1px solid #3a6b4c; border-radius: 6px;
+  background: #122a1c; color: #fff;
+}
+.hint { color: #87ab92; font-size: .8rem; margin-top: 16px; }
+#lobby-players { list-style: none; padding: 0; }
+#lobby-players li { padding: 6px 10px; background: #122a1c; border-radius: 6px; margin: 4px 0; }
+
+/* ── Buttons ─────────────────────────────────────────────────────────────── */
+button {
+  background: #3a8d5a; color: #fff; border: none;
+  padding: 9px 14px; border-radius: 7px; font-size: .9rem;
+  cursor: pointer; margin: 4px 6px 4px 0;
+}
+button:hover { background: #45a86a; }
+button:disabled { background: #2c4636; color: #6f8a78; cursor: not-allowed; }
+
+/* ── Top bar ─────────────────────────────────────────────────────────────── */
+#topbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.pill {
+  background: #1d3f2b; border: 1px solid #2f5d40;
+  padding: 5px 12px; border-radius: 999px; font-size: .85rem;
+}
+.pill.turn-mine { background: #3a8d5a; border-color: #45a86a; font-weight: 600; }
+
+/* ── Prompt / reactive panel ─────────────────────────────────────────────── */
+#prompt-panel {
+  background: #21503a; border: 1px solid #3a8d5a;
+  border-radius: 10px; padding: 12px 16px; margin-bottom: 16px;
+  min-height: 20px;
+}
+#prompt-panel.urgent { background: #5a3a1d; border-color: #c2792e; }
+#prompt-panel .prompt-title { font-weight: 600; margin-bottom: 8px; }
+
+/* ── Board blocks ────────────────────────────────────────────────────────── */
+.board-block { margin-bottom: 18px; }
+.subrow { display: flex; gap: 24px; align-items: flex-start; }
+.subrow .grow { flex: 1; }
+
+#opponents { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 18px; }
+.opponent {
+  background: #18361f; border: 1px solid #2f5d40;
+  border-radius: 10px; padding: 12px; flex: 1 1 280px; min-width: 260px;
+}
+.opponent.turn-active { border-color: #45a86a; box-shadow: 0 0 0 2px #45a86a55; }
+.opponent .opp-head { display: flex; justify-content: space-between; align-items: baseline; }
+.opponent .opp-name { font-weight: 600; }
+.opponent .roll { font-size: .8rem; color: #c7e0cf; }
+
+/* ── Cards ───────────────────────────────────────────────────────────────── */
+.card-row { display: flex; flex-wrap: wrap; gap: 8px; min-height: 10px; }
+.card {
+  width: 120px; min-height: 86px;
+  background: #f3f1e6; color: #1c2a1f;
+  border-radius: 8px; padding: 8px;
+  font-size: .72rem; display: flex; flex-direction: column;
+  border: 2px solid transparent;
+}
+.card-name { font-weight: 700; font-size: .78rem; margin-bottom: 4px; }
+.card-desc { color: #44503f; line-height: 1.25; overflow: hidden; }
+.card-type { margin-top: auto; font-size: .62rem; text-transform: uppercase; color: #8a9384; letter-spacing: .04em; }
+
+/* card colours by type */
+.card--hero      { background: #eaf3ff; }
+.card--monster   { background: #ffe7e0; }
+.card--magic     { background: #f3e6ff; }
+.card--item      { background: #fff6da; }
+.card--modifier  { background: #e3f7ec; }
+.card--challenge { background: #ffeaf2; }
+.card--leader    { background: #fff0cf; border-color: #d9a93b; }
+
+/* face-down (opponent hand) */
+.card--back {
+  background: repeating-linear-gradient(45deg, #25543a, #25543a 8px, #1d4530 8px, #1d4530 16px);
+  border-color: #2f5d40;
+}
+.card.mini { width: 46px; min-height: 64px; padding: 0; }
+
+/* selectable in the current context */
+.card.selectable, .opponent.selectable {
+  cursor: pointer; border-color: #f2c14e;
+  box-shadow: 0 0 0 2px #f2c14e88;
+}
+.card.selectable:hover { transform: translateY(-3px); transition: transform .08s; }
+.opponent.selectable:hover { border-color: #f2c14e; box-shadow: 0 0 0 3px #f2c14e88; transition: box-shadow .08s; }
+
+.modifier-opts { display: flex; gap: 4px; margin-top: 4px; }
+.modifier-opts button { padding: 2px 8px; font-size: .7rem; margin: 0; }
+
+/* ── Error toast ─────────────────────────────────────────────────────────── */
+#error-toast {
+  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+  background: #b5342b; color: #fff; padding: 10px 18px;
+  border-radius: 8px; box-shadow: 0 4px 16px #0006; z-index: 50;
+}

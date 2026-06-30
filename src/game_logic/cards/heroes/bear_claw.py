@@ -17,11 +17,23 @@ class BearClaw(Hero):
     def use_ability(self, game: Game, player: Player) -> None:
         # 1st call: ask which opponent to steal from.
         if game.target_player is None:
+            # Guard: if every opponent's hand is empty there's nothing to steal.
+            if not any(p.hand for p in game.players if p is not player):
+                game.pending_choice = None
+                return
             game.pending_choice = ChoiceType.CHOOSE_TARGET_PLAYER
             game.phase = Phase.AWAITING_CHOICE
             return
 
-        # 2nd call: a target is chosen. Pull a random card from their hand...
+        # 2nd call: a target is chosen. Guard against an empty hand (the player
+        # might have chosen someone who had cards when the prompt opened but
+        # discarded since — or the UI allowed picking anyone).
+        if not game.target_player.hand:
+            game.target_player = None
+            game.pending_choice = None
+            return
+
+        # Pull a random card from their hand...
         first_card = random.choice(game.target_player.hand)
         game.target_player.hand.remove(first_card)
         player.hand.append(first_card)
@@ -33,3 +45,4 @@ class BearClaw(Hero):
             player.hand.append(second_card)
 
         game.target_player = None
+        game.pending_choice = None  # signal "done" so submit_choice finalizes
