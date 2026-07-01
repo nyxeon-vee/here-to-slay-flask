@@ -1,0 +1,8 @@
+<li><a href="/index.php?title=Here_To_Slay_-_Call_to_the_Fallen" title="Here To Slay - Call to the Fallen">Call to the Fallen</a></li>
+<li><a href="/index.php?title=Here_To_Slay_-_Critical_Boost" title="Here To Slay - Critical Boost">Critical Boost</a></li>
+<li><a href="/index.php?title=Here_To_Slay_-_Destructive_Spell" title="Here To Slay - Destructive Spell">Destructive Spell</a></li>
+<li><a href="/index.php?title=Here_To_Slay_-_Enchanted_Spell" title="Here To Slay - Enchanted Spell">Enchanted Spell</a></li>
+<li><a href="/index.php?title=Here_To_Slay_-_Entangling_Trap" title="Here To Slay - Entangling Trap">Entangling Trap</a></li>
+<li><a href="/index.php?title=Here_To_Slay_-_Forced_Exchange" title="Here To Slay - Forced Exchange">Forced Exchange</a></li>
+<li><a href="/index.php?title=Here_To_Slay_-_Forceful_Winds" title="Here To Slay - Forceful Winds">Forceful Winds</a></li>
+<li><a href="/index.php?title=Here_To_Slay_-_Winds_of_Change" title="Here To Slay - Winds of Change">Winds of Change</a></li>

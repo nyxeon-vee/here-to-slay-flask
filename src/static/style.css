@@ -82,20 +82,27 @@ button:disabled { background: #2c4636; color: #6f8a78; cursor: not-allowed; }
 /* Image-based card — no padding, image fills the frame */
 .card--img {
   width: 100px;
-  height: 140px;           /* standard card aspect ~5:7 */
+  height: 140px;           /* standard hero/item/magic/modifier/challenge ratio */
   border-radius: 8px;
   border: 2px solid transparent;
-  overflow: visible;       /* allow scale to spill out */
+  overflow: visible;
   position: relative;
   flex-shrink: 0;
-  /* hover scale origin: bottom-centre so the card grows upward */
   transform-origin: bottom center;
   transition: transform 0.18s ease, box-shadow 0.18s ease;
 }
 .card--img:hover {
-  transform: scale(1.5);
+  transform: scale(2);
   z-index: 10;
-  box-shadow: 0 8px 24px #0009;
+  box-shadow: 0 12px 32px #000b;
+}
+
+/* Leaders and monsters have a taller portrait ratio (500 × 853 ≈ 0.586) */
+/* and are displayed slightly larger to stand out on the table.           */
+.card--img.card--leader,
+.card--img.card--monster {
+  width: 110px;
+  height: 188px;
 }
 
 /* The actual <img> fills the card */
@@ -125,7 +132,7 @@ button:disabled { background: #2c4636; color: #6f8a78; cursor: not-allowed; }
   background: repeating-linear-gradient(45deg, #25543a, #25543a 8px, #1d4530 8px, #1d4530 16px);
   flex-shrink: 0;
 }
-.card--back.mini { width: 46px; height: 64px; }  /* alias kept for JS compat */
+.card--back.mini { width: 46px; height: 64px; }
 
 /* selectable highlight — gold ring, pointer cursor */
 .card.selectable, .opponent.selectable {
@@ -133,12 +140,31 @@ button:disabled { background: #2c4636; color: #6f8a78; cursor: not-allowed; }
   border-color: #f2c14e;
   box-shadow: 0 0 0 2px #f2c14e88;
 }
-/* selectable cards still scale on hover but add the gold glow */
 .card--img.selectable:hover {
-  transform: scale(1.5);
-  box-shadow: 0 0 0 3px #f2c14e, 0 8px 24px #0009;
+  transform: scale(2);
+  box-shadow: 0 0 0 3px #f2c14e, 0 12px 32px #000b;
 }
 .opponent.selectable:hover { border-color: #f2c14e; box-shadow: 0 0 0 3px #f2c14e88; transition: box-shadow .08s; }
+
+/* ── Custom card tooltip ─────────────────────────────────────────────────── */
+#card-tooltip {
+  position: fixed;
+  pointer-events: none;
+  z-index: 100;
+  max-width: 220px;
+  background: #1a3d28f0;
+  border: 1px solid #3a8d5a;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 0.95rem;
+  line-height: 1.4;
+  color: #eef2ee;
+  box-shadow: 0 4px 20px #0008;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+  /* hidden by default */
+}
+#card-tooltip.visible { opacity: 1; }
 
 .modifier-opts { display: flex; gap: 4px; margin-top: 4px; }
 .modifier-opts button { padding: 2px 8px; font-size: .7rem; margin: 0; }

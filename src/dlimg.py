@@ -21,8 +21,6 @@ from pathlib import Path
 import requests
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-IMAGES_TXT = SCRIPT_DIR / "images.txt"
-OUT_DIR = SCRIPT_DIR / "static" / "img" / "card" / "heroes"
 
 REQUEST_DELAY_SECONDS = 1.5
 
@@ -30,11 +28,11 @@ LINE_RE = re.compile(r'href="/index\.php\?title=Here_To_Slay_-_([^"]+)"')
 IMG_RE = re.compile(r'<img alt="" src="([^"]+)"')
 
 
-def main(limit: int | None = None) -> None:
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
+def main(images_txt: Path, out_dir: Path, limit: int | None = None) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     processed = 0
-    for line in IMAGES_TXT.read_text().splitlines():
+    for line in images_txt.read_text().splitlines():
         if limit is not None and processed >= limit:
             break
         match = LINE_RE.search(line)
@@ -42,7 +40,7 @@ def main(limit: int | None = None) -> None:
             continue
 
         href_name = match.group(1)
-        hero = href_name.lower()
+        name = href_name.lower()
 
         page_url = f"{domain}/index.php?title=Here_To_Slay_-_{href_name}"
         resp = requests.get(page_url)
@@ -50,7 +48,7 @@ def main(limit: int | None = None) -> None:
 
         img_match = IMG_RE.search(resp.text)
         if not img_match:
-            print(f"no image found for {hero}")
+            print(f"no image found for {name}")
             continue
 
         src = img_match.group(1)
@@ -61,7 +59,7 @@ def main(limit: int | None = None) -> None:
         img_resp = requests.get(img_url)
         img_resp.raise_for_status()
 
-        out_path = OUT_DIR / f"{hero}.png"
+        out_path = out_dir / f"{name}.png"
         out_path.write_bytes(img_resp.content)
         print(f"saved {out_path}")
 
@@ -70,7 +68,16 @@ def main(limit: int | None = None) -> None:
 
 
 if __name__ == "__main__":
-    import sys
+    import argparse
 
-    arg_limit = int(sys.argv[1]) if len(sys.argv) > 1 else None
-    main(arg_limit)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("images_txt", help="e.g. images_leaders.txt")
+    parser.add_argument("out_subdir", help="e.g. leaders, monsters, items, magic")
+    parser.add_argument("--limit", type=int, default=None)
+    args = parser.parse_args()
+
+    main(
+        SCRIPT_DIR / args.images_txt,
+        SCRIPT_DIR / "static" / "img" / "card" / args.out_subdir,
+        args.limit,
+    )

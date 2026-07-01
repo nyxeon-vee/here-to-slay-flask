@@ -145,13 +145,13 @@ function cardEl(card, opts = {}) {
     return el;
   }
 
-  el.className = "card card--img" + (opts.mini ? " mini" : "");
+  el.className = "card card--img card--" + card.card_type + (opts.mini ? " mini" : "");
+  el.dataset.tooltip = `${card.name}\n${card.description}`;
 
   const folder = CARD_TYPE_FOLDER[card.card_type] || card.card_type;
   const img = document.createElement("img");
   img.src = `/static/img/card/${folder}/${card.card_id}.png`;
   img.alt = card.name;
-  img.title = `${card.name}\n${card.description}`;
   img.className = "card-img";
   // If the image is missing, fall back to a small text label so the card
   // is still usable during development before all art is in place.
@@ -521,3 +521,25 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
+
+// ── Custom card tooltip ────────────────────────────────────────────────────
+// Replaces native `title` so we can control font size and style.
+const _tip = document.createElement("div");
+_tip.id = "card-tooltip";
+document.body.appendChild(_tip);
+
+document.addEventListener("mouseover", e => {
+  const card = e.target.closest("[data-tooltip]");
+  if (!card) return;
+  const [name, ...rest] = card.dataset.tooltip.split("\n");
+  _tip.innerHTML = `<strong>${escapeHtml(name)}</strong>${rest.length ? "<br>" + escapeHtml(rest.join("\n")) : ""}`;
+  _tip.classList.add("visible");
+});
+document.addEventListener("mousemove", e => {
+  _tip.style.left = (e.clientX + 14) + "px";
+  _tip.style.top  = (e.clientY + 14) + "px";
+});
+document.addEventListener("mouseout", e => {
+  if (!e.target.closest("[data-tooltip]")) return;
+  _tip.classList.remove("visible");
+});

@@ -1,0 +1,18 @@
+Make the currently played card visible in middle of the screen
+Bug when plying modifier on someone elses roll during a hero activation
+Slaing monster doesnt work, doesnt get added to party softlocks the game (stuck on roll_pending)
+Modifer +4 or -4 cant be playd (no option issue for sure)
+Lucky bucky you can steal more than 1 card and it softlolcks the game
+a view_discard_pile request to se all the cards in the discard
+Better Roll_pending div with what action being challenged and with list of all the players that used modifiers
+
+
+A chat_log of all the events happening in the game; Player1 drew a card! Player2 Challanged! Player1 Played bad_axe etc etc etc
+Send a game event for each event.. event logging: DESTROY event for example playes a destoy animation
+
+
+Write all the other cards (progress.png)
+
+
+
+write session/ or a login/register screen
