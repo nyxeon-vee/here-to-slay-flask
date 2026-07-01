@@ -53,6 +53,12 @@ def serialize_game(game: Game, viewer: Player) -> dict:
         "pending_card":      game.pending_card.to_dict() if game.pending_card else None,
         "pending_player_id": game.pending_player.player_id if game.pending_player else None,
 
+        # ── Roll overlay: initial dice value before any modifiers ────────────
+        "last_roll": {
+            "player_id": game.last_roll_player_id,
+            "initial":   game.last_roll_initial,
+        } if game.last_roll_player_id else None,
+
         # ── Prompt info: present only while phase == AWAITING_CHOICE ──────────
         "pending_choice":    game.pending_choice.name if game.pending_choice else None,
         "choice_player_id":  answering,                       # who should answer

@@ -99,7 +99,7 @@ def _open_timed_window(room: "session.Room", socketio: SocketIO) -> None:
     game = room.game
     if game.phase == Phase.CHALLENGE_WINDOW:
         seconds = CHALLENGE_WINDOW_SECONDS
-    elif game.phase == Phase.ROLL_PENDING and game.challenge_context:
+    elif game.phase == Phase.ROLL_PENDING:
         seconds = MODIFIER_WINDOW_SECONDS
     else:
         return  # ACTION / AWAITING_CHOICE / etc. — nothing to time
@@ -127,6 +127,8 @@ def _advance_window(room: "session.Room", socketio: SocketIO) -> None:
             game.close_challenge_roll_1()                 # challenged player rolls next
         else:
             game.close_challenge_roll_2()                 # compare the rolls & resolve
+    elif game.phase == Phase.ROLL_PENDING:
+        game.finish_pending_roll()                        # hero/monster roll window closed
     _open_timed_window(room, socketio)                    # next window, if any
     _broadcast_state(room, socketio)
 
@@ -200,7 +202,8 @@ def register_handlers(socketio: SocketIO) -> None:
         if not room:
             return _error("You are not in a room")
         monster = session.find_card(room.game, data["uid"])
-        _do(room, socketio, lambda: room.game.attack_monster(player, monster))
+        if _do(room, socketio, lambda: room.game.attack_monster(player, monster)):
+            _open_timed_window(room, socketio)
 
     @socketio.on("use_party_ability")
     def on_use_party(data):
@@ -208,7 +211,8 @@ def register_handlers(socketio: SocketIO) -> None:
         if not room:
             return _error("You are not in a room")
         hero = session.find_card(room.game, data["uid"])
-        _do(room, socketio, lambda: room.game.use_party_ability(player, hero))
+        if _do(room, socketio, lambda: room.game.use_party_ability(player, hero)):
+            _open_timed_window(room, socketio)
 
     @socketio.on("play_modifier")
     def on_play_modifier(data):
@@ -220,7 +224,7 @@ def register_handlers(socketio: SocketIO) -> None:
         card = session.find_card(room.game, data["uid"])
         if _do(room, socketio, lambda: room.game.play_modifier(player, card, data.get("choice", 0))):
             _open_timed_window(room, socketio)
-
+ 
     @socketio.on("play_challenge")
     def on_play_challenge(data):
         # Challenging cancels the challenge-window timer (the token bump inside

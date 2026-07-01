@@ -150,9 +150,14 @@ class Hero(Card):
         self.hero_class = hero_class
         self.activation_roll = activation_roll
         self.item: Item | None = None
+        self.was_used_this_turn: bool = False
 
     def add_item(self, item: Item) -> None:
         self.item = item
+
+    def reset_turn(self) -> None:
+        """Called at the start of each new turn to allow the ability again."""
+        self.was_used_this_turn = False
 
     def apply(self, game: Game, player: Player) -> None:
         """Template method: the shared 'play a Hero from hand' sequence.
@@ -162,42 +167,40 @@ class Hero(Card):
         """
         player.hand.remove(self)
         player.party.append(self)
-        self.roll_and_activate(game, player)
+        self.roll_and_activate(game, player, context_type="hero_play")
 
-    def roll_and_activate(self, game: Game, player: Player) -> None:
-        """Roll for this hero and run its ability on success.
+    def roll_and_activate(self, game: Game, player: Player, context_type: str = "hero_party") -> None:
+        """Roll for this hero and park in ROLL_PENDING for the modifier window.
 
-        Shared by apply() (hero played from hand) and use_party_ability() (hero
-        already in the party). Both paths need the same roll / leader bonus /
-        item-on-failure sequence, so it lives here instead of in game.py.
+        Sets `game.pending_roll_context` so game.finish_pending_roll() knows
+        how to resume after the modifier window closes. Does NOT run the
+        ability — that happens in finish_roll(), called by finish_pending_roll().
 
-          1. roll the dice (stored on player.current_roll)
+          1. roll the dice (stored on player.current_roll + game.last_roll_initial)
           2. let the leader's passive bump the roll (HERO_ROLL event)
-          3a. WIN  -> fire SUCCESSFUL_HERO_ROLL on party monsters, then use_ability
-          3b. LOSE -> fire UNSUCCESSFUL_HERO_ROLL on the equipped item (if any)
+          3. store context, leave phase at ROLL_PENDING
         """
+        self.was_used_this_turn = True
         game.phase = Phase.ROLL_PENDING
         game.roll_dice(player)
         if player.party_leader:
             player.party_leader.on_event(GameEvent.HERO_ROLL, game, player)
+        game.pending_roll_context = {"type": context_type, "hero": self, "player": player}
+
+    def finish_roll(self, game: Game, player: Player) -> None:
+        """Resolve this hero's roll after the modifier window has closed.
+
+        Called by game.finish_pending_roll(). WIN fires party-monster events then
+        runs the ability; LOSE fires the equipped item's passive.
+        """
         if self.evaluate_roll(player.current_roll) == RollOutcome.WIN:
-            # Only Monsters in the party react to a successful hero roll
-            # (e.g. Arctic Aries draws a card); Heroes ignore this event.
             for party_card in player.party:
                 if isinstance(party_card, Monster):
                     party_card.on_event(GameEvent.SUCCESSFUL_HERO_ROLL, game, player)
             self.use_ability(game, player)
         else:
-            # Failed roll: the item EQUIPPED TO THIS HERO reacts, if any. The item
-            # lives on self (the rolling hero), so there's no party to search —
-            # Particularly Rusty Coin draws a card here.
             if self.item is not None:
                 self.item.on_event(GameEvent.UNSUCCESSFUL_HERO_ROLL, game, player)
-        # Only auto-advance to ACTION if the ability didn't park us somewhere
-        # else (a multi-step ability sets phase to AWAITING_CHOICE and we must
-        # leave it there until the player answers and use_ability is re-called).
-        if game.phase == Phase.ROLL_PENDING:
-            game.phase = Phase.ACTION
 
     @abstractmethod
     def use_ability(self, game: Game, player: Player) -> None:
@@ -221,9 +224,10 @@ class Hero(Card):
     def to_dict(self):
         return {
             **super().to_dict(),
-            "hero_class":      self.hero_class.value,
-            "activation_roll": {"value": self.activation_roll.value, "condition": self.activation_roll.condition.value},
-            "item":            self.item.to_dict() if self.item else None,
+            "hero_class":         self.hero_class.value,
+            "activation_roll":    {"value": self.activation_roll.value, "condition": self.activation_roll.condition.value},
+            "item":               self.item.to_dict() if self.item else None,
+            "was_used_this_turn": self.was_used_this_turn,
         }
 class Monster(Card):
     card_type: CardType = CardType.MONSTER

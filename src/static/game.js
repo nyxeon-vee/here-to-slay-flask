@@ -62,6 +62,7 @@ function render() {
 
   if (!inGame) return renderLobby();
   renderTopbar();
+  renderRollOverlay();
   renderPrompt();
   renderOpponents();
   renderMonsterRow();
@@ -79,6 +80,42 @@ function renderLobby() {
   });
 }
 
+function renderRollOverlay() {
+  const overlay = $("roll-overlay");
+  const lr = STATE.last_roll;
+
+  if (!lr || STATE.phase !== "ROLL_PENDING") {
+    overlay.classList.add("hidden");
+    return;
+  }
+
+  // Dice faces are fixed to the INITIAL roll (before any modifier is applied).
+  // The running total below updates live as modifiers are played.
+  const d1 = Math.floor(lr.initial / 2);
+  const d2 = lr.initial - d1;
+
+  // Find the roller to get their current (possibly modified) total.
+  const roller = STATE.players.find(p => p.player_id === lr.player_id);
+  const currentTotal = roller ? roller.current_roll : lr.initial;
+  const delta = currentTotal - lr.initial;
+  const deltaStr = delta === 0 ? "" : (delta > 0 ? ` (+${delta})` : ` (${delta})`);
+
+  $("roll-who").textContent =
+    lr.player_id === MY_ID ? "Your roll" : `${nameOf(lr.player_id)}'s roll`;
+
+  const diceRow = $("roll-dice");
+  diceRow.innerHTML = "";
+  [d1, d2].forEach(val => {
+    const die = document.createElement("div");
+    die.className = "die";
+    die.textContent = val;
+    diceRow.appendChild(die);
+  });
+
+  $("roll-total").textContent = `= ${currentTotal}${deltaStr}`;
+  overlay.classList.remove("hidden");
+}
+
 function renderTopbar() {
   $("phase-pill").textContent = "Phase: " + STATE.phase;
   const turn = $("turn-pill");
@@ -93,23 +130,39 @@ function renderTopbar() {
 //  CARD ELEMENT BUILDER
 //  opts: { selectable, onClick, faceDown, mini }
 // ───────────────────────────────────────────────────────────────────────────
+
+// card_type values from the server are singular ("hero", "monster", …).
+// The image folder uses plural names to match a conventional asset layout.
+const CARD_TYPE_FOLDER = {
+  hero: "heroes", monster: "monsters", leader: "leaders",
+  item: "items", magic: "magic", modifier: "modifiers", challenge: "challenges",
+};
+
 function cardEl(card, opts = {}) {
   const el = document.createElement("div");
   if (opts.faceDown) {
     el.className = "card card--back" + (opts.mini ? " mini" : "");
     return el;
   }
-  el.className = "card card--" + card.card_type + (opts.mini ? " mini" : "");
-  const name = document.createElement("div");
-  name.className = "card-name";
-  name.textContent = card.name;
-  const desc = document.createElement("div");
-  desc.className = "card-desc";
-  desc.textContent = card.description;
-  const type = document.createElement("div");
-  type.className = "card-type";
-  type.textContent = card.card_type;
-  el.append(name, desc, type);
+
+  el.className = "card card--img" + (opts.mini ? " mini" : "");
+
+  const folder = CARD_TYPE_FOLDER[card.card_type] || card.card_type;
+  const img = document.createElement("img");
+  img.src = `/static/img/card/${folder}/${card.card_id}.png`;
+  img.alt = card.name;
+  img.title = `${card.name}\n${card.description}`;
+  img.className = "card-img";
+  // If the image is missing, fall back to a small text label so the card
+  // is still usable during development before all art is in place.
+  img.onerror = function () {
+    this.style.display = "none";
+    const label = document.createElement("div");
+    label.className = "card-fallback";
+    label.textContent = card.name;
+    el.appendChild(label);
+  };
+  el.appendChild(img);
 
   if (opts.selectable && opts.onClick) {
     el.classList.add("selectable");
@@ -158,17 +211,10 @@ function renderChallengeWindow(panel) {
   panel.appendChild(title);
 
   if (!iPlayed) {
-    const challenges = (me().hand || []).filter(c => c.card_type === "challenge");
-    if (challenges.length === 0) {
-      panel.appendChild(note("You have no Challenge cards. (Resolves automatically.)"));
-    } else {
-      challenges.forEach(c => {
-        const b = document.createElement("button");
-        b.textContent = `Challenge with "${c.name}"`;
-        b.onclick = () => send("play_challenge", { uid: c.uid });
-        panel.appendChild(b);
-      });
-    }
+    const hasChallenges = (me().hand || []).some(c => c.card_type === "challenge");
+    panel.appendChild(note(hasChallenges
+      ? "Click a Challenge card in your hand to play it."
+      : "You have no Challenge cards. (Resolves automatically.)"));
   }
   panel.appendChild(note("The window closes on its own after a few seconds."));
 }
@@ -363,6 +409,13 @@ function myPartyCard(card) {
       onClick: () => send("submit_choice", { target_hero_uid: card.uid }) });
   }
   if (isHero && isMyTurn() && STATE.phase === "ACTION") {
+    if (card.was_used_this_turn) {
+      // Ability spent this turn — render as normal but visually dimmed.
+      const el = cardEl(card);
+      el.style.opacity = "0.45";
+      el.title = "Already used this turn";
+      return el;
+    }
     return cardEl(card, { selectable: true,
       onClick: () => send("use_party_ability", { uid: card.uid }) });
   }
@@ -377,6 +430,44 @@ function myHandCard(card) {
     return cardEl(card, { selectable: true,
       onClick: () => send("submit_choice", { target_card_uid: card.uid }) });
   }
+
+  // Modifiers are only playable during a roll window — not as a regular action.
+  if (card.card_type === "modifier") {
+    if (STATE.phase !== "ROLL_PENDING") return cardEl(card);
+    // Two-sided modifier (+1 / -3): render inline choice buttons instead of
+    // making the card itself clickable (player must pick which side to apply).
+    if (card.options && card.options.length > 1) {
+      const wrap = document.createElement("div");
+      const base = cardEl(card);
+      const opts = document.createElement("div");
+      opts.className = "modifier-opts";
+      card.options.forEach((opt, idx) => {
+        const b = document.createElement("button");
+        b.textContent = (opt >= 0 ? "+" : "") + opt;
+        b.onclick = () => send("play_modifier", { uid: card.uid, choice: idx });
+        opts.appendChild(b);
+      });
+      base.appendChild(opts);
+      wrap.appendChild(base);
+      return wrap;
+    }
+    // Single-value modifier: clicking the card plays it.
+    return cardEl(card, { selectable: true,
+      onClick: () => send("play_modifier", { uid: card.uid, choice: 0 }) });
+  }
+
+  // Challenge cards are only playable during the challenge window, and only by
+  // opponents (the server enforces this — we just hide the button for the player
+  // who played the card so the UI stays clean).
+  if (card.card_type === "challenge") {
+    const canChallenge = STATE.phase === "CHALLENGE_WINDOW"
+      && STATE.pending_player_id !== MY_ID;
+    if (!canChallenge) return cardEl(card);
+    return cardEl(card, { selectable: true,
+      onClick: () => send("play_challenge", { uid: card.uid }) });
+  }
+
+  // Heroes, magic, and items are played as normal actions on your turn.
   if (isMyTurn() && STATE.phase === "ACTION") {
     return cardEl(card, { selectable: true,
       onClick: () => send("play_card", { uid: card.uid }) });

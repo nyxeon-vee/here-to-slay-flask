@@ -77,6 +77,15 @@
 
   <div id="error-toast" class="hidden"></div>
 
+  <!-- ── Roll overlay: floats centred on screen during ROLL_PENDING ──────── -->
+  <div id="roll-overlay" class="hidden">
+    <div id="roll-overlay-inner">
+      <div id="roll-who"></div>
+      <div id="roll-dice"></div>
+      <div id="roll-total"></div>
+    </div>
+  </div>
+
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
   <script src="{{ url_for('static', filename='game.js') }}"></script>
 </body>

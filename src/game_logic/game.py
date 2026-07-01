@@ -62,6 +62,12 @@ class Game():
         #    reads it to resume the exact method that paused. None when not paused.
         self.paused: tuple[str, Card, Player] | None = None
 
+        # ── Roll context: set when ROLL_PENDING, cleared when roll resolves ──
+        #    Carries enough info to finish the roll after the modifier window.
+        self.pending_roll_context: dict | None = None
+        self.last_roll_player_id: str | None = None   # for the roll overlay
+        self.last_roll_initial: int = 0               # dice total BEFORE modifiers
+
     def _spend_ap(self, player: Player, amount: int) -> None:
         # Charge action points for a move, refusing if the player can't afford it.
         if player.action_points < amount:
@@ -110,7 +116,7 @@ class Game():
             "challenger_roll": None,
         }
         self.challenge_context["current_roller"] = challenger  # steers _get_rolling_player
-        challenger.current_roll = random.randint(1, 6) + random.randint(1, 6)
+        self.roll_dice(challenger)
         if challenger.party_leader:
             challenger.party_leader.on_event(GameEvent.CHALLENGE_ROLL, self, challenger)
         self.phase = Phase.ROLL_PENDING  # modifier window for challenger's roll
@@ -122,7 +128,7 @@ class Game():
         ctx = self.challenge_context
         challenged = ctx["challenged"]
         ctx["current_roller"] = challenged  # modifiers now target the challenged player
-        challenged.current_roll = random.randint(1, 6) + random.randint(1, 6)
+        self.roll_dice(challenged)
         if challenged.party_leader:
             challenged.party_leader.on_event(GameEvent.CHALLENGE_ROLL, self, challenged)
         self.phase = Phase.ROLL_PENDING  # modifier window for challenged's roll
@@ -136,6 +142,8 @@ class Game():
         challenged: Player = ctx["challenged"]
         self.challenge_context = None
 
+        self.last_roll_player_id = None
+        self.last_roll_initial = 0
         if challenger.current_roll >= challenged.current_roll:  # tie goes to challenger
             # Challenge succeeds: the card is cancelled. It was committed to the
             # table but never resolved, so it's still in the player's hand — pull
@@ -184,6 +192,8 @@ class Game():
         # Two six-sided dice. Result lives on the player (player.current_roll) so
         # that two rolls can coexist during a challenge — see _get_rolling_player.
         player.current_roll = random.randint(1, 6) + random.randint(1, 6)
+        self.last_roll_player_id = player.player_id
+        self.last_roll_initial = player.current_roll
 
     def play_card(self, player: Player, card: Card) -> None:
         # Commit the card to the table and OPEN the challenge window. The card is
@@ -217,6 +227,11 @@ class Game():
         if self.phase == Phase.AWAITING_CHOICE:
             kind = "hero_play" if isinstance(self.pending_card, Hero) else "magic_play"
             self.paused = (kind, self.pending_card, self.pending_player)
+            return
+        if self.phase == Phase.ROLL_PENDING:
+            # Hero.roll_and_activate parked us here; pending_roll_context already
+            # set. _on_card_resolved will be called by finish_pending_roll() once
+            # the modifier window closes. pending_card stays set until then.
             return
         self._on_card_resolved()
 
@@ -330,19 +345,53 @@ class Game():
         # Leader passive: The Divine Arrow adds +1 when attacking a monster.
         if player.party_leader:
             player.party_leader.on_event(GameEvent.MONSTER_ATTACK, self, player)
-        outcome: RollOutcome = monster.evaluate_roll(player.current_roll)
-        if outcome == RollOutcome.WIN:
-            self.monster_row.remove(monster)
-            player.add_to_party(monster)
-            self.refill_monster_row()
-        elif outcome == RollOutcome.LOSE:
-            # The monster decides the penalty; it may need player input (pick a
-            # hero to sacrifice). If it paused, bookmark the resume and wait.
-            monster.apply_failure(self, player)
+        self.pending_roll_context = {"type": "monster_attack", "monster": monster, "player": player}
+        # Phase stays ROLL_PENDING — game_socket opens the modifier window.
+        # Resolution happens in finish_pending_roll() when the window closes.
+
+    def finish_pending_roll(self) -> None:
+        """Resolve a hero or monster roll after the modifier window has closed.
+
+        Called by game_socket._advance_window when ROLL_PENDING expires with no
+        challenge_context. Reads pending_roll_context, runs the appropriate
+        resolution, then returns to ACTION (or AWAITING_CHOICE if the effect
+        needs more player input).
+        """
+        ctx = self.pending_roll_context
+        if ctx is None:
+            raise InvalidPhaseError("No roll in progress")
+        self.pending_roll_context = None
+        self.last_roll_player_id = None
+        self.last_roll_initial = 0
+
+        t = ctx["type"]
+        if t in ("hero_play", "hero_party"):
+            hero: Hero = ctx["hero"]
+            player: Player = ctx["player"]
+            hero.finish_roll(self, player)
             if self.pending_choice is not None:
-                self.paused = ("monster_failure", monster, player)
+                kind = "hero_play" if t == "hero_play" else "party_ability"
+                self.paused = (kind, hero, player)
                 return
-        self.phase = Phase.ACTION
+            if t == "hero_play":
+                self._on_card_resolved()
+            else:
+                self.phase = Phase.ACTION
+
+        elif t == "monster_attack":
+            monster: Monster = ctx["monster"]
+            player: Player = ctx["player"]
+            outcome: RollOutcome = monster.evaluate_roll(player.current_roll)
+            if outcome == RollOutcome.WIN:
+                self.monster_row.remove(monster)
+                player.add_to_party(monster)
+                self.refill_monster_row()
+            elif outcome == RollOutcome.LOSE:
+                monster.apply_failure(self, player)
+                if self.pending_choice is not None:
+                    self.paused = ("monster_failure", monster, player)
+                    return
+            self.phase = Phase.ACTION
 
     def use_party_ability(self, player: Player, card: Hero) -> None:
         # Activate the ability of a hero already in your party (no new roll —
@@ -353,12 +402,13 @@ class Game():
             raise InvalidPhaseError("It is not your turn!")
         if card not in player.party:
             raise CardNotInPartyError
+        if card.was_used_this_turn:
+            raise InvalidPhaseError(f"{card.name}'s ability has already been used this turn!")
         self._spend_ap(player, card.action_cost)
-        card.roll_and_activate(self, player)
-        # If the roll succeeded but the ability paused for input, bookmark how
-        # to resume it. A failed roll never pauses (items react synchronously).
-        if self.pending_choice is not None:
-            self.paused = ("party_ability", card, player)
+        card.roll_and_activate(self, player, context_type="hero_party")
+        # Phase is now ROLL_PENDING; game_socket opens the modifier window.
+        # finish_pending_roll() is called when the window closes and handles
+        # the ability + any AWAITING_CHOICE pause bookmark.
 
     def discard_all_cards(self, player: Player) -> None:
         # The "mulligan" move: pay 3 AP to dump your whole hand and draw 5 fresh.
@@ -380,9 +430,15 @@ class Game():
         self._advance_to_next_player()
 
     def start_turn(self, player: Player) -> None:
-        # Reset for the new active player. Each turn grants a fresh 3 AP.
+        # Reset for the new active player. Each turn grants a fresh 3 AP and
+        # every hero in their party gets their ability back.
         self.phase = Phase.ACTION
         player.action_points = 3
+        self.last_roll_player_id = None
+        self.last_roll_initial = 0
+        for card in player.party:
+            if isinstance(card, Hero):
+                card.reset_turn()
 
     def draw_card(self, player: Player) -> None:
         if self.phase != Phase.ACTION:
