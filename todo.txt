@@ -1,4 +1,4 @@
-Make the currently played card visible in middle of the screen
+DONE Make the currently played card visible in middle of the screen
 Bug when plying modifier on someone elses roll during a hero activation
 Slaing monster doesnt work, doesnt get added to party softlocks the game (stuck on roll_pending)
 Modifer +4 or -4 cant be playd (no option issue for sure)
