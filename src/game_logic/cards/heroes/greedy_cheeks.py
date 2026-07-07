@@ -39,9 +39,11 @@ class GreedyCheeks(Hero):
         if game.pending_targets:
             game.pending_choice_player = game.pending_targets[0]
             game.phase = Phase.AWAITING_CHOICE
+            game.message = "Choose a card to give to player"
             return
 
         # All opponents done — add every gathered card to the player's hand.
         player.hand.extend(game.collected_cards)
         game.collected_cards = []
         game.pending_choice = None
+        game.message = None

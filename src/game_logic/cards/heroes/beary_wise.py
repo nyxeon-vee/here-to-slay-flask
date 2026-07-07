@@ -29,6 +29,7 @@ class BearyWise(Hero):
             game.collected_cards = []
             game.pending_choice = ChoiceType.CHOOSE_CARD_FROM_OWN_HAND
 
+
         if game.pending_choice == ChoiceType.CHOOSE_CARD_FROM_OWN_HAND:
             # Process previous opponent's choice
             if game.target_card is not None:
@@ -42,6 +43,7 @@ class BearyWise(Hero):
             if game.pending_targets:
                 game.pending_choice_player = game.pending_targets[0]
                 game.phase = Phase.AWAITING_CHOICE
+                game.message = "Choose a card to give to discard"
                 return
 
             # All opponents done — active player picks one to keep
@@ -49,6 +51,7 @@ class BearyWise(Hero):
                 game.pending_choice = ChoiceType.CHOOSE_CARD_FROM_POOL
                 game.pending_choice_player = player
                 game.phase = Phase.AWAITING_CHOICE
+                game.message = "Choose a card to add to your hand"
                 return
 
             game.pending_choice = None
@@ -63,3 +66,4 @@ class BearyWise(Hero):
         game.target_card = None
         game.pending_choice_player = None
         game.pending_choice = None
+        game.message = None

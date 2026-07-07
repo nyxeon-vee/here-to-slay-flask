@@ -32,6 +32,7 @@ class QiBear(Hero):
                 return
             game.pending_choice = ChoiceType.CHOOSE_NUMBER
             game.phase = Phase.AWAITING_CHOICE
+            game.message = "Choose a number of cards to discard"
             return
 
         # Each loop turn needs two answers (a card to discard, then a hero to
@@ -41,6 +42,7 @@ class QiBear(Hero):
             if game.target_card is None:
                 game.pending_choice = ChoiceType.CHOOSE_CARD_FROM_OWN_HAND
                 game.phase = Phase.AWAITING_CHOICE
+                game.message = "Choose a card to discard"
                 return
             if game.target_hero is None:
                 # Guard: a previous pair may have destroyed the last opponent
@@ -56,6 +58,7 @@ class QiBear(Hero):
                     break
                 game.pending_choice = ChoiceType.CHOOSE_HERO_FROM_OPPONENT_PARTY
                 game.phase = Phase.AWAITING_CHOICE
+                game.message = "Choose a hero to destroy"
                 return
             # Both answers in: complete one pair and decrement the counter.
             player.discard(game.target_card)
@@ -65,6 +68,6 @@ class QiBear(Hero):
             game.target_hero = None
             game.target_player = None
             game.choice -= 1
-
+        game.message = None
         game.choice = None
         game.pending_choice = None

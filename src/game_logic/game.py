@@ -67,7 +67,9 @@ class Game():
         self.pending_roll_context: dict | None = None
         self.last_roll_player_id: str | None = None   # for the roll overlay
         self.last_roll_initial: int = 0               # dice total BEFORE modifiers
-
+        self.last_roll_current: int = 0               # live total AFTER modifiers
+        self.message: str | None = None               # message for the choice
+        
     def _spend_ap(self, player: Player, amount: int) -> None:
         # Charge action points for a move, refusing if the player can't afford it.
         if player.action_points < amount:
@@ -126,6 +128,8 @@ class Game():
         if self.challenge_context is None:
             raise InvalidPhaseError("No challenge in progress")
         ctx = self.challenge_context
+        # Lock in the challenger's final roll before moving to the challenged player.
+        ctx["challenger_roll"] = ctx["challenger"].current_roll
         challenged = ctx["challenged"]
         ctx["current_roller"] = challenged  # modifiers now target the challenged player
         self.roll_dice(challenged)
@@ -144,6 +148,7 @@ class Game():
 
         self.last_roll_player_id = None
         self.last_roll_initial = 0
+        self.last_roll_current = 0
         if challenger.current_roll >= challenged.current_roll:  # tie goes to challenger
             # Challenge succeeds: the card is cancelled. It was committed to the
             # table but never resolved, so it's still in the player's hand — pull
@@ -194,6 +199,7 @@ class Game():
         player.current_roll = random.randint(1, 6) + random.randint(1, 6)
         self.last_roll_player_id = player.player_id
         self.last_roll_initial = player.current_roll
+        self.last_roll_current = player.current_roll
 
     def play_card(self, player: Player, card: Card) -> None:
         # Commit the card to the table and OPEN the challenge window. The card is
@@ -304,6 +310,7 @@ class Game():
         rolling_player = self._get_rolling_player()  # may be an opponent, mid-challenge
         if rolling_player:
             rolling_player.current_roll += card.options[choice]
+            self.last_roll_current = rolling_player.current_roll  # keep overlay in sync
         self.discard_pile.append(card)
         player.hand.remove(card)
         # Abyss Queen passive: when SOMEONE ELSE modifies your roll, +1. Skip when
@@ -363,6 +370,7 @@ class Game():
         self.pending_roll_context = None
         self.last_roll_player_id = None
         self.last_roll_initial = 0
+        self.last_roll_current = 0
 
         t = ctx["type"]
         if t in ("hero_play", "hero_party"):
@@ -436,6 +444,7 @@ class Game():
         player.action_points = 3
         self.last_roll_player_id = None
         self.last_roll_initial = 0
+        self.last_roll_current = 0
         for card in player.party:
             if isinstance(card, Hero):
                 card.reset_turn()
@@ -450,8 +459,9 @@ class Game():
 
     def refill_monster_row(self) -> None:
         # Keep the monster row stocked from the monster deck (called at setup and
-        # after each monster is slain).
-        self.monster_row.append(self.monster_deck.pop())
+        # after each monster is slain). No-op if the deck runs out.
+        if self.monster_deck:
+            self.monster_row.append(self.monster_deck.pop())
 
     def check_win_condition(self) -> Player | None:
         """Return the winner, or None. Win by either 3 slain monsters or having

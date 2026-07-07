@@ -22,12 +22,14 @@ class ArcticAries(Monster):
         if game.pending_choice is None:
             game.pending_choice = ChoiceType.CHOOSE_HERO_FROM_OWN_PARTY
             game.phase = Phase.AWAITING_CHOICE
+            game.message = "Choose a Hero to sacrifice"
             return
         if game.target_hero:
             player.remove_from_party(game.target_hero)
             game.discard_pile.append(game.target_hero)
             game.target_hero = None
             game.pending_choice = None
+            game.message = None
 
     # Passive (once this monster is in your party): draw on every successful hero
     # roll. SUCCESSFUL_HERO_ROLL is fired by Hero.apply on each party Monster.

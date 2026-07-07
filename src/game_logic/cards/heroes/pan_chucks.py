@@ -25,6 +25,7 @@ class PanChucks(Hero):
                 return
             game.pending_choice = ChoiceType.CHOOSE_YES_NO
             game.phase = Phase.AWAITING_CHOICE
+            game.message = "Do you want to reveal the card and destroy the hero?"
             return
 
         # 2nd call: player answered yes/no to "reveal and destroy a hero?".
@@ -46,6 +47,7 @@ class PanChucks(Hero):
             game.pending_choice = ChoiceType.CHOOSE_HERO_FROM_OPPONENT_PARTY
             if game.target_player is None or game.target_hero is None:
                 game.phase = Phase.AWAITING_CHOICE
+                game.message = "Choose a hero to destroy"
                 return
         # 3rd call: a hero is targeted -> destroy it.
         target_hero = game.target_hero
@@ -53,4 +55,5 @@ class PanChucks(Hero):
         game.discard_pile.append(target_hero)
         game.target_player = None
         game.target_hero = None
+        game.message = None
         game.pending_choice = None

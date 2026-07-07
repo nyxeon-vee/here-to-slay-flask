@@ -29,10 +29,12 @@ class BadAxe(Hero):
                 return
             game.pending_choice = ChoiceType.CHOOSE_HERO_FROM_OPPONENT_PARTY
             game.phase = Phase.AWAITING_CHOICE
+            game.message = "Choose a hero to destroy!"
             return
         target_hero = game.target_hero
         game.target_player.remove_from_party(target_hero)
         game.discard_pile.append(target_hero)
         game.target_player = None   # clear the scratchpad for the next ability
         game.target_hero = None
+        game.message = None
         game.pending_choice = None  # signal "done" so submit_choice finalizes

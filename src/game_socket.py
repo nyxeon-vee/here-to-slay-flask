@@ -236,6 +236,17 @@ def register_handlers(socketio: SocketIO) -> None:
         if _do(room, socketio, lambda: room.game.play_challenge(player, card)):
             _open_timed_window(room, socketio)
 
+    @socketio.on("show_discard")
+    def show_discard(_data=None):
+        room, _player = _ctx()
+        if not room:
+            return _error("You are not in a room")
+        # Emit only to the requesting socket — newest card first.
+        pile = [c.to_dict() for c in reversed(room.game.discard_pile)]
+        emit("discard_pile", {"cards": pile})
+
+
+
     # ── Answering a prompt (the re-entrant abilities) ───────────────────────
 
     @socketio.on("submit_choice")

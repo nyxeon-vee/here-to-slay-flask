@@ -129,6 +129,9 @@ class Card(ABC):
     @abstractmethod
     def apply(self, game: Game, player: Player) -> None: ...
 
+    def on_event(self, event: "GameEvent", game: "Game", player: "Player") -> None:
+        pass  # default: ignore all events; Monster/Leader/Item override selectively
+
 
     def to_dict(self) -> dict:
         return {

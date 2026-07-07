@@ -23,6 +23,7 @@ class FuryKnuckle(Hero):
                 return
             game.pending_choice = ChoiceType.CHOOSE_TARGET_PLAYER
             game.phase = Phase.AWAITING_CHOICE
+            game.message = "Choose player to pull a card from"
             return
 
         if not game.target_player.hand:
@@ -41,3 +42,4 @@ class FuryKnuckle(Hero):
 
         game.target_player = None
         game.pending_choice = None  # signal "done" so submit_choice finalizes
+        game.message = None

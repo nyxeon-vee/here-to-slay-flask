@@ -41,6 +41,7 @@ class ToughTeddy(Hero):
         if game.pending_targets:
             game.pending_choice_player = game.pending_targets[0]
             game.phase = Phase.AWAITING_CHOICE
+            game.message = "Choose a card to discard"
             return
 
         game.pending_choice = None

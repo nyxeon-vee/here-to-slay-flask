@@ -25,6 +25,7 @@ class CallToTheFallen(Magic):
         if game.target_card and game.target_card in game.discard_pile:
             game.discard_pile.remove(game.target_card)
         player.hand.append(game.target_card)
+        player.hand.remove(self)
         game.collected_cards = []
         game.target_card = None
         game.pending_choice = None

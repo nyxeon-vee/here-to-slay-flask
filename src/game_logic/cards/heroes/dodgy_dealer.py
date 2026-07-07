@@ -18,9 +18,11 @@ class DodgyDealer(Hero):
         if game.target_player is None:
             game.pending_choice = ChoiceType.CHOOSE_TARGET_PLAYER
             game.phase = Phase.AWAITING_CHOICE
+            game.message = "Choose a player to trade hands with"
             return
 
         # 2nd call: swap the two hand lists in one tuple-assignment.
         player.hand, game.target_player.hand = game.target_player.hand, player.hand
         game.target_player = None
         game.pending_choice = None  # signal "done" so submit_choice finalizes
+        game.message = None

@@ -13,6 +13,95 @@ The socket layer ships these as JSON. Two rules shape what goes in:
 """
 from game_logic.game import Game
 from game_logic.player import Player
+from game_logic.base import Phase
+
+
+def _action_context(game: Game) -> dict | None:
+    """Describe what is currently happening on the table.
+
+    Returns a dict the client renders in the floating action overlay, or None
+    when there's nothing interesting to display (plain ACTION phase).
+    """
+    phase = game.phase
+
+    # Card on the table waiting for a challenge or still in the challenge window.
+    if phase == Phase.CHALLENGE_WINDOW and game.pending_card and game.pending_player:
+        pp = game.pending_player
+        return {
+            "phase":       "challenge_window",
+            "player_name": pp.name,
+            "player_id":   pp.player_id,
+            "card":        game.pending_card.to_dict(),
+            "label":       f"played {game.pending_card.name}",
+            # Pre-populate dice columns at zero — fills in once a challenge starts.
+            "challenger_roll": None,
+            "challenged_roll": {"player_id": pp.player_id, "name": pp.name, "roll": None},
+        }
+
+    # A roll just happened (hero ability, monster attack, or challenge roll).
+    if phase == Phase.ROLL_PENDING:
+        ctx = game.pending_roll_context
+        if ctx:
+            t = ctx["type"]
+            if t in ("hero_play", "hero_party"):
+                hero   = ctx["hero"]
+                player = ctx["player"]
+                return {
+                    "phase":       "hero_roll",
+                    "player_name": player.name,
+                    "player_id":   player.player_id,
+                    "card":        hero.to_dict() if hero else None,
+                    "label":       "using ability" if t == "hero_party" else "playing hero",
+                }
+            if t == "monster_attack":
+                monster = ctx["monster"]
+                player  = ctx["player"]
+                return {
+                    "phase":       "monster_attack",
+                    "player_name": player.name,
+                    "player_id":   player.player_id,
+                    "card":        monster.to_dict(),
+                    "label":       "attacking monster",
+                }
+        # Challenge roll — show both the card being contested and who is rolling.
+        if game.challenge_context:
+            ctx         = game.challenge_context
+            roller      = ctx.get("current_roller")
+            challenger  = ctx["challenger"]
+            challenged  = ctx["challenged"]
+            is_step2    = roller is challenged  # both have rolled
+            return {
+                "phase":       "challenge_roll",
+                "player_name": roller.name if roller else "?",
+                "player_id":   roller.player_id if roller else None,
+                "card":        game.pending_card.to_dict() if game.pending_card else None,
+                "label":       "rolling for challenge",
+                # Both rolls shown side-by-side; challenged_roll is None until step 2.
+                "challenger_roll": {
+                    "player_id": challenger.player_id,
+                    "name":      challenger.name,
+                    "roll":      ctx.get("challenger_roll") if is_step2 else game.last_roll_current,
+                },
+                # challenged_roll always present; roll=None until step 2 (shows "?").
+                "challenged_roll": {
+                    "player_id": challenged.player_id,
+                    "name":      challenged.name,
+                    "roll":      game.last_roll_current if is_step2 else None,
+                },
+            }
+
+    # A card effect is paused waiting for player input — keep the card visible.
+    if phase == Phase.AWAITING_CHOICE and game.paused:
+        _kind, card, player = game.paused
+        return {
+            "phase":       "awaiting_choice",
+            "player_name": player.name,
+            "player_id":   player.player_id,
+            "card":        card.to_dict(),
+            "label":       "resolving ability",
+        }
+
+    return None
 
 
 def serialize_player(player: Player, reveal_hand: bool) -> dict:
@@ -57,11 +146,18 @@ def serialize_game(game: Game, viewer: Player) -> dict:
         "last_roll": {
             "player_id": game.last_roll_player_id,
             "initial":   game.last_roll_initial,
+            "current":   game.last_roll_current,
         } if game.last_roll_player_id else None,
+
+        # ── Action context: what is currently happening on the table ─────────
+        # Shown in the floating overlays so players always know what they're
+        # responding to — card name, description, and who triggered it.
+        "action_context": _action_context(game),
 
         # ── Prompt info: present only while phase == AWAITING_CHOICE ──────────
         "pending_choice":    game.pending_choice.name if game.pending_choice else None,
         "choice_player_id":  answering,                       # who should answer
+        "choice_message":    game.message,                    # optional prompt text set by the card
         # A temporary pool to choose from (Beary Wise, Call To The Fallen, ...).
         "collected_cards":   [c.to_dict() for c in game.collected_cards],
     }

@@ -18,6 +18,7 @@ let MY_ID = null;       // our player_id == our socket id (set by join_game serv
 socket.on("connect", () => { MY_ID = socket.id; });
 socket.on("game_state", (s) => { STATE = s; render(); });
 socket.on("error", (e) => flash(e.message));
+socket.on("discard_pile", (data) => renderDiscardModal(data.cards));
 
 // ── Helpers to read the snapshot from "my" point of view ───────────────────
 const me        = () => STATE.players.find(p => p.player_id === MY_ID);
@@ -47,6 +48,24 @@ document.querySelectorAll("#action-bar button").forEach(btn => {
   btn.onclick = () => send(btn.dataset.act);
 });
 
+// Discard pill → request full pile; close button hides the modal.
+$("discard-pill").onclick = () => send("show_discard");
+$("discard-close-btn").onclick = () => $("discard-modal").classList.add("hidden");
+$("discard-modal").addEventListener("click", e => {
+  if (e.target === $("discard-modal")) $("discard-modal").classList.add("hidden");
+});
+
+function renderDiscardModal(cards) {
+  const grid = $("discard-card-grid");
+  grid.innerHTML = "";
+  if (cards.length === 0) {
+    grid.textContent = "Discard pile is empty.";
+  } else {
+    cards.forEach(c => grid.appendChild(cardEl(c)));
+  }
+  $("discard-modal").classList.remove("hidden");
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 //  TOP-LEVEL RENDER — pick the screen, then fill the board
 // ───────────────────────────────────────────────────────────────────────────
@@ -62,7 +81,7 @@ function render() {
 
   if (!inGame) return renderLobby();
   renderTopbar();
-  renderRollOverlay();
+  renderActionOverlay();
   renderPrompt();
   renderOpponents();
   renderMonsterRow();
@@ -80,40 +99,251 @@ function renderLobby() {
   });
 }
 
-function renderRollOverlay() {
-  const overlay = $("roll-overlay");
-  const lr = STATE.last_roll;
+// ── Countdown timer ────────────────────────────────────────────────────────
+const TIMER_SECS = { CHALLENGE_WINDOW: 8, ROLL_PENDING: 6 };
+let _timerInterval = null;
 
-  if (!lr || STATE.phase !== "ROLL_PENDING") {
-    overlay.classList.add("hidden");
+function _setTimerArc(pct) {
+  $("timer-arc").setAttribute("stroke-dasharray", `${pct.toFixed(1)} 100`);
+}
+
+function startTimer(total) {
+  clearInterval(_timerInterval);
+  let remaining = total;
+  function tick() {
+    $("timer-secs").textContent = remaining;
+    _setTimerArc((remaining / total) * 100);
+    if (remaining === 0) { clearInterval(_timerInterval); return; }
+    remaining--;
+  }
+  tick();
+  _timerInterval = setInterval(tick, 1000);
+}
+
+function updateTimer() {
+  const total = TIMER_SECS[STATE.phase];
+  if (!total) {
+    clearInterval(_timerInterval);
+    $("ao-timer").classList.add("hidden");
     return;
   }
+  $("ao-timer").classList.remove("hidden");
+  // Every state update in a timed phase means the server restarted its timer
+  // (modifier played, challenge played, or just entered this phase) — mirror it.
+  startTimer(total);
+}
 
-  // Dice faces are fixed to the INITIAL roll (before any modifier is applied).
-  // The running total below updates live as modifiers are played.
-  const d1 = Math.floor(lr.initial / 2);
-  const d2 = lr.initial - d1;
-
-  // Find the roller to get their current (possibly modified) total.
-  const roller = STATE.players.find(p => p.player_id === lr.player_id);
-  const currentTotal = roller ? roller.current_roll : lr.initial;
-  const delta = currentTotal - lr.initial;
-  const deltaStr = delta === 0 ? "" : (delta > 0 ? ` (+${delta})` : ` (${delta})`);
-
-  $("roll-who").textContent =
-    lr.player_id === MY_ID ? "Your roll" : `${nameOf(lr.player_id)}'s roll`;
+// ── Challenge dice helper — always 2-column layout ─────────────────────────
+function renderChallengeDice(ctx) {
+  const cr = ctx.challenger_roll;   // null before anyone challenges
+  const cd = ctx.challenged_roll;   // null roll until step 2
 
   const diceRow = $("roll-dice");
   diceRow.innerHTML = "";
-  [d1, d2].forEach(val => {
-    const die = document.createElement("div");
-    die.className = "die";
-    die.textContent = val;
-    diceRow.appendChild(die);
+  $("roll-who").textContent = "";
+  $("roll-total").textContent = "";
+
+  const vsEl = document.createElement("div");
+  vsEl.className = "challenge-rolls";
+
+  const left  = cr || { player_id: null, name: "Challenger", roll: null };
+  const right = cd || { player_id: null, name: "Challenged", roll: null };
+
+  [[left, "Challenger"], [right, "Challenged"]].forEach(([info, label]) => {
+    const col = document.createElement("div");
+    col.className = "challenge-roll-col";
+
+    const nameEl = document.createElement("div");
+    nameEl.className = "challenge-roll-name";
+    nameEl.textContent = info.player_id === MY_ID
+      ? `${label} (You)`
+      : (info.name && info.name !== label ? `${label}: ${escapeHtml(info.name)}` : label);
+
+    const rollEl = document.createElement("div");
+    rollEl.className = "challenge-roll-total";
+    rollEl.textContent = info.roll != null ? info.roll : "?";
+
+    col.append(nameEl, rollEl);
+    vsEl.appendChild(col);
   });
 
-  $("roll-total").textContent = `= ${currentTotal}${deltaStr}`;
+  diceRow.appendChild(vsEl);
+}
+
+function renderActionOverlay() {
+  const overlay     = $("action-overlay");
+  const ctx         = STATE.action_context;
+  const diceSection = $("ao-dice-section");
+  const interactive = $("ao-interactive");
+  interactive.innerHTML = "";
+
+  const phase = STATE.phase;
+  const isChallengPhase = ctx && (ctx.phase === "challenge_window" || ctx.phase === "challenge_roll");
+
+  // Hide the overlay and timer when there's nothing contextual to show.
+  if (!ctx && phase !== "AWAITING_CHOICE") {
+    overlay.classList.add("hidden");
+    updateTimer();
+    return;
+  }
   overlay.classList.remove("hidden");
+  updateTimer();
+
+  // ── Label ────────────────────────────────────────────────────────────────
+  const labelEl = $("ao-label");
+  if (ctx) {
+    const isSelf = ctx.player_id === MY_ID;
+    const who    = isSelf ? "You" : escapeHtml(ctx.player_name);
+    const verb   = ctx.label || ctx.phase.replace(/_/g, " ");
+    labelEl.textContent = isSelf ? `You — ${verb}` : `${who} — ${verb}`;
+  } else {
+    labelEl.textContent = "Choose…";
+  }
+
+  // ── Card thumbnail + name + description ──────────────────────────────────
+  const cardArea = $("ao-card-area");
+  cardArea.innerHTML = "";
+  const card = ctx && ctx.card;
+  if (card) {
+    const wrap = document.createElement("div");
+    wrap.className = "ao-card";
+    const folder = CARD_TYPE_FOLDER[card.card_type] || card.card_type;
+    const img = document.createElement("img");
+    img.src = `/static/img/card/${folder}/${card.card_id}.png`;
+    img.alt = card.name;
+    img.className = "ao-card-img";
+    img.onerror = () => { img.style.display = "none"; };
+    const info = document.createElement("div");
+    info.className = "ao-card-info";
+    info.innerHTML =
+      `<div class="ao-card-name">${escapeHtml(card.name)}</div>` +
+      `<div class="ao-card-desc">${escapeHtml(card.description)}</div>`;
+    wrap.append(img, info);
+    cardArea.appendChild(wrap);
+  }
+
+  // ── Dice section ─────────────────────────────────────────────────────────
+  const lr = STATE.last_roll;
+  if (isChallengPhase) {
+    // Challenge: always show two columns (? until rolled)
+    diceSection.classList.remove("hidden");
+    renderChallengeDice(ctx);
+  } else if (phase === "ROLL_PENDING" && lr) {
+    // Hero ability or monster attack — single roll with dice faces
+    diceSection.classList.remove("hidden");
+    const d1 = Math.floor(lr.initial / 2);
+    const d2 = lr.initial - d1;
+    const current = lr.current;
+    const delta = current - lr.initial;
+    const deltaStr = delta === 0 ? "" : (delta > 0 ? ` (+${delta})` : ` (${delta})`);
+    $("roll-who").textContent =
+      lr.player_id === MY_ID ? "Your roll" : `${nameOf(lr.player_id)}'s roll`;
+    const diceRow = $("roll-dice");
+    diceRow.innerHTML = "";
+    [d1, d2].forEach(val => {
+      const die = document.createElement("div");
+      die.className = "die";
+      die.textContent = val;
+      diceRow.appendChild(die);
+    });
+    $("roll-total").textContent = `= ${current}${deltaStr}`;
+  } else {
+    diceSection.classList.add("hidden");
+  }
+
+  // ── Interactive section ───────────────────────────────────────────────────
+  if (phase === "CHALLENGE_WINDOW") {
+    _buildChallengeWindowUI(interactive);
+  } else if (phase === "ROLL_PENDING") {
+    _buildModifierUI(interactive);
+  } else if (phase === "AWAITING_CHOICE") {
+    _buildChoiceUI(interactive);
+  }
+}
+
+function _buildChallengeWindowUI(box) {
+  const iPlayed = STATE.pending_player_id === MY_ID;
+  const cardName = STATE.pending_card ? STATE.pending_card.name : "a card";
+  const title = document.createElement("div");
+  title.className = "prompt-title";
+  title.textContent = iPlayed
+    ? `Your "${cardName}" is on the table — waiting for challenges…`
+    : `Will anyone challenge "${cardName}"?`;
+  box.appendChild(title);
+
+  if (!iPlayed) {
+    const hasChallenges = (me().hand || []).some(c => c.card_type === "challenge");
+    box.appendChild(note(hasChallenges
+      ? "Click a Challenge card in your hand to play it."
+      : "You have no Challenge cards."));
+  }
+}
+
+function _buildModifierUI(box) {
+  const mods = (me().hand || []).filter(c => c.card_type === "modifier");
+  if (mods.length === 0) {
+    box.appendChild(note("You have no Modifier cards."));
+    return;
+  }
+  mods.forEach(c => {
+    const wrap = document.createElement("div");
+    wrap.className = "modifier-opts";
+    const label = document.createElement("span");
+    label.textContent = `"${c.name}":`;
+    label.style.marginRight = "6px";
+    wrap.appendChild(label);
+    (c.options || [0]).forEach((opt, idx) => {
+      const b = document.createElement("button");
+      b.textContent = (opt >= 0 ? "+" : "") + opt;
+      b.onclick = () => send("play_modifier", { uid: c.uid, choice: idx });
+      wrap.appendChild(b);
+    });
+    box.appendChild(wrap);
+  });
+}
+
+function _buildChoiceUI(box) {
+  const choice = myChoice();
+  if (!choice) {
+    box.appendChild(note(`Waiting for ${nameOf(STATE.choice_player_id)} to choose…`));
+    return;
+  }
+  const title = document.createElement("div");
+  title.className = "prompt-title";
+  title.textContent = STATE.choice_message || promptText(choice);
+  box.appendChild(title);
+
+  if (choice === "CHOOSE_YES_NO") {
+    const row = document.createElement("div");
+    row.style.display = "flex"; row.style.gap = "8px";
+    ["Yes", "No"].forEach((label, idx) => {
+      const b = document.createElement("button");
+      b.textContent = label;
+      b.onclick = () => send("submit_choice", { choice: idx });
+      row.appendChild(b);
+    });
+    box.appendChild(row);
+  } else if (choice === "CHOOSE_NUMBER") {
+    const row = document.createElement("div");
+    row.style.display = "flex"; row.style.gap = "8px"; row.style.alignItems = "center";
+    const input = document.createElement("input");
+    input.type = "number"; input.value = "0"; input.style.width = "70px";
+    const b = document.createElement("button");
+    b.textContent = "OK";
+    b.onclick = () => send("submit_choice", { choice: parseInt(input.value || "0", 10) });
+    row.append(input, b);
+    box.appendChild(row);
+  } else if (choice === "CHOOSE_CARD_FROM_POOL") {
+    const row = document.createElement("div");
+    row.className = "card-row";
+    STATE.collected_cards.forEach(c => {
+      row.appendChild(cardEl(c, { selectable: true,
+        onClick: () => send("submit_choice", { target_card_uid: c.uid }) }));
+    });
+    box.appendChild(row);
+  } else {
+    box.appendChild(note("Click the highlighted target on the board."));
+  }
 }
 
 function renderTopbar() {
@@ -147,6 +377,9 @@ function cardEl(card, opts = {}) {
 
   el.className = "card card--img card--" + card.card_type + (opts.mini ? " mini" : "");
   el.dataset.tooltip = `${card.name}\n${card.description}`;
+  if (card.activation_roll) {
+    el.dataset.roll = JSON.stringify(card.activation_roll);
+  }
 
   const folder = CARD_TYPE_FOLDER[card.card_type] || card.card_type;
   const img = document.createElement("img");
@@ -179,121 +412,13 @@ function cardEl(card, opts = {}) {
 // ───────────────────────────────────────────────────────────────────────────
 function renderPrompt() {
   const panel = $("prompt-panel");
-  panel.innerHTML = "";
-  panel.classList.remove("urgent");
-
-  // 1) A card is on the table — opponents may challenge it.
-  if (STATE.phase === "CHALLENGE_WINDOW") return renderChallengeWindow(panel);
-
-  // 2) A roll is live (only happens during a challenge here) — play modifiers.
-  if (STATE.phase === "ROLL_PENDING") return renderModifierWindow(panel);
-
-  // 3) A card effect is paused waiting on a choice.
-  if (STATE.phase === "AWAITING_CHOICE") return renderChoice(panel);
-
-  // 4) Plain action phase.
+  // Only shown during plain ACTION phase — everything else is in the action overlay.
+  const show = STATE.phase === "ACTION";
+  panel.style.display = show ? "" : "none";
+  if (!show) return;
   panel.textContent = isMyTurn()
     ? "Your turn — play a card, attack a monster, use a party hero, or draw."
     : `Waiting for ${currentName()} to act…`;
-}
-
-function renderChallengeWindow(panel) {
-  panel.classList.add("urgent");
-  const playerName = nameOf(STATE.pending_player_id);
-  const cardName = STATE.pending_card ? STATE.pending_card.name : "a card";
-  const iPlayed = STATE.pending_player_id === MY_ID;
-
-  const title = document.createElement("div");
-  title.className = "prompt-title";
-  title.textContent = iPlayed
-    ? `Your "${cardName}" is on the table — waiting to see if anyone challenges…`
-    : `${playerName} is playing "${cardName}". Challenge it?`;
-  panel.appendChild(title);
-
-  if (!iPlayed) {
-    const hasChallenges = (me().hand || []).some(c => c.card_type === "challenge");
-    panel.appendChild(note(hasChallenges
-      ? "Click a Challenge card in your hand to play it."
-      : "You have no Challenge cards. (Resolves automatically.)"));
-  }
-  panel.appendChild(note("The window closes on its own after a few seconds."));
-}
-
-function renderModifierWindow(panel) {
-  panel.classList.add("urgent");
-  const title = document.createElement("div");
-  title.className = "prompt-title";
-  title.textContent = "A roll is in progress — play a Modifier to change it?";
-  panel.appendChild(title);
-
-  // Show the live rolls so players can decide.
-  const rolls = STATE.players
-    .filter(p => p.current_roll)
-    .map(p => `${p.name}: ${p.current_roll}`).join("   ");
-  if (rolls) panel.appendChild(note("Rolls — " + rolls));
-
-  const mods = (me().hand || []).filter(c => c.card_type === "modifier");
-  if (mods.length === 0) {
-    panel.appendChild(note("You have no Modifier cards."));
-  } else {
-    mods.forEach(c => {
-      const wrap = document.createElement("div");
-      wrap.className = "modifier-opts";
-      const label = document.createElement("span");
-      label.textContent = `"${c.name}":`;
-      label.style.marginRight = "6px";
-      wrap.appendChild(label);
-      // options is e.g. [1, -3] — one button per side.
-      (c.options || [0]).forEach((opt, idx) => {
-        const b = document.createElement("button");
-        b.textContent = (opt >= 0 ? "+" : "") + opt;
-        b.onclick = () => send("play_modifier", { uid: c.uid, choice: idx });
-        wrap.appendChild(b);
-      });
-      panel.appendChild(wrap);
-    });
-  }
-  panel.appendChild(note("Closes on its own after a few seconds."));
-}
-
-function renderChoice(panel) {
-  const choice = myChoice();
-  if (!choice) {
-    panel.textContent = `Waiting for ${nameOf(STATE.choice_player_id)} to choose…`;
-    return;
-  }
-  const title = document.createElement("div");
-  title.className = "prompt-title";
-  title.textContent = promptText(choice);
-  panel.appendChild(title);
-
-  if (choice === "CHOOSE_YES_NO") {
-    ["Yes", "No"].forEach((label, idx) => {
-      const b = document.createElement("button");
-      b.textContent = label;
-      b.onclick = () => send("submit_choice", { choice: idx });  // 0 = yes, 1 = no
-      panel.appendChild(b);
-    });
-  } else if (choice === "CHOOSE_NUMBER") {
-    const input = document.createElement("input");
-    input.type = "number"; input.value = "0"; input.style.width = "70px";
-    const b = document.createElement("button");
-    b.textContent = "OK";
-    b.onclick = () => send("submit_choice", { choice: parseInt(input.value || "0", 10) });
-    panel.append(input, b);
-  } else if (choice === "CHOOSE_CARD_FROM_POOL") {
-    const row = document.createElement("div");
-    row.className = "card-row";
-    STATE.collected_cards.forEach(c => {
-      row.appendChild(cardEl(c, { selectable: true,
-        onClick: () => send("submit_choice", { target_card_uid: c.uid }) }));
-    });
-    panel.appendChild(row);
-  } else {
-    // The rest are answered by clicking a hero / player / hand card on the
-    // board (see selectability rules in renderOpponents / renderMe).
-    panel.appendChild(note("Click the highlighted target on the board."));
-  }
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -343,20 +468,32 @@ function renderOpponents() {
   });
 }
 
+// Wrap a hero element with its equipped item displayed below it.
+function stackWithItem(card, heroEl) {
+  if (!card.item) return heroEl;
+  const stack = document.createElement("div");
+  stack.className = "party-hero-stack";
+  stack.appendChild(heroEl);
+  const itemEl = cardEl(card.item);
+  itemEl.classList.add("party-item-card");
+  stack.appendChild(itemEl);
+  return stack;
+}
+
 // A party card on an OPPONENT becomes selectable when a choice targets an
 // opponent's / any party's hero.
 function heroSelectable(card, owner) {
   const choice = myChoice();
   const isHero = card.card_type === "hero";
   if (isHero && choice === "CHOOSE_HERO_FROM_OPPONENT_PARTY") {
-    return cardEl(card, { selectable: true,
-      onClick: () => send("submit_choice", { target_player_id: owner.player_id, target_hero_uid: card.uid }) });
+    return stackWithItem(card, cardEl(card, { selectable: true,
+      onClick: () => send("submit_choice", { target_player_id: owner.player_id, target_hero_uid: card.uid }) }));
   }
   if (isHero && choice === "CHOOSE_HERO_FROM_ANY_PARTY") {
-    return cardEl(card, { selectable: true,
-      onClick: () => send("submit_choice", { target_hero_uid: card.uid }) });
+    return stackWithItem(card, cardEl(card, { selectable: true,
+      onClick: () => send("submit_choice", { target_hero_uid: card.uid }) }));
   }
-  return cardEl(card);
+  return stackWithItem(card, cardEl(card));
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -405,21 +542,20 @@ function myPartyCard(card) {
   const choice = myChoice();
   const isHero = card.card_type === "hero";
   if (isHero && (choice === "CHOOSE_HERO_FROM_OWN_PARTY" || choice === "CHOOSE_HERO_FROM_ANY_PARTY")) {
-    return cardEl(card, { selectable: true,
-      onClick: () => send("submit_choice", { target_hero_uid: card.uid }) });
+    return stackWithItem(card, cardEl(card, { selectable: true,
+      onClick: () => send("submit_choice", { target_hero_uid: card.uid }) }));
   }
   if (isHero && isMyTurn() && STATE.phase === "ACTION") {
     if (card.was_used_this_turn) {
-      // Ability spent this turn — render as normal but visually dimmed.
       const el = cardEl(card);
       el.style.opacity = "0.45";
       el.title = "Already used this turn";
-      return el;
+      return stackWithItem(card, el);
     }
-    return cardEl(card, { selectable: true,
-      onClick: () => send("use_party_ability", { uid: card.uid }) });
+    return stackWithItem(card, cardEl(card, { selectable: true,
+      onClick: () => send("use_party_ability", { uid: card.uid }) }));
   }
-  return cardEl(card);
+  return stackWithItem(card, cardEl(card));
 }
 
 // A card in MY hand: clickable to play it (ACTION), or to answer a
@@ -532,7 +668,20 @@ document.addEventListener("mouseover", e => {
   const card = e.target.closest("[data-tooltip]");
   if (!card) return;
   const [name, ...rest] = card.dataset.tooltip.split("\n");
-  _tip.innerHTML = `<strong>${escapeHtml(name)}</strong>${rest.length ? "<br>" + escapeHtml(rest.join("\n")) : ""}`;
+  let html = `<strong>${escapeHtml(name)}</strong>`;
+  if (rest.length) html += `<br><span class="tip-desc">${escapeHtml(rest.join("\n"))}</span>`;
+
+  if (card.dataset.roll) {
+    const roll = JSON.parse(card.dataset.roll);
+    const atLeast = roll.condition === "at_least";
+    const sign    = atLeast ? "+" : "−";
+    const color   = atLeast ? "#6fcf97" : "#eb5757";
+    html += `<br><span class="tip-roll" style="color:${color}">`
+          + `Roll ${sign}${roll.value} or ${atLeast ? "higher" : "lower"}`
+          + `</span>`;
+  }
+
+  _tip.innerHTML = html;
   _tip.classList.add("visible");
 });
 document.addEventListener("mousemove", e => {

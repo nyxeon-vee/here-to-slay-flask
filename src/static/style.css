@@ -52,14 +52,12 @@ button:disabled { background: #2c4636; color: #6f8a78; cursor: not-allowed; }
 }
 .pill.turn-mine { background: #3a8d5a; border-color: #45a86a; font-weight: 600; }
 
-/* ── Prompt / reactive panel ─────────────────────────────────────────────── */
+/* ── Prompt panel — only visible in plain ACTION phase ───────────────────── */
 #prompt-panel {
   background: #21503a; border: 1px solid #3a8d5a;
   border-radius: 10px; padding: 12px 16px; margin-bottom: 16px;
   min-height: 20px;
 }
-#prompt-panel.urgent { background: #5a3a1d; border-color: #c2792e; }
-#prompt-panel .prompt-title { font-weight: 600; margin-bottom: 8px; }
 
 /* ── Board blocks ────────────────────────────────────────────────────────── */
 .board-block { margin-bottom: 18px; }
@@ -165,31 +163,126 @@ button:disabled { background: #2c4636; color: #6f8a78; cursor: not-allowed; }
   /* hidden by default */
 }
 #card-tooltip.visible { opacity: 1; }
+.tip-desc { color: #b5d4be; font-size: 0.88rem; }
+.tip-roll { font-size: 0.82rem; font-weight: 600; letter-spacing: .03em; }
 
 .modifier-opts { display: flex; gap: 4px; margin-top: 4px; }
 .modifier-opts button { padding: 2px 8px; font-size: .7rem; margin: 0; }
 
-/* ── Roll overlay ────────────────────────────────────────────────────────── */
-#roll-overlay {
+/* ── Action overlay ──────────────────────────────────────────────────────── */
+/* Floats centred on screen during CHALLENGE_WINDOW, ROLL_PENDING, AWAITING_CHOICE. */
+#action-overlay {
   position: fixed;
-  inset: 0;                         /* cover entire viewport */
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  pointer-events: none;             /* clicks pass through to the board below */
+  pointer-events: none;             /* board stays clickable underneath */
   z-index: 40;
 }
-#roll-overlay-inner {
-  background: #1a3d28ee;
+#action-overlay-inner {
+  background: #1a3d28f2;
   border: 2px solid #3a8d5a;
-  border-radius: 14px;
-  padding: 20px 28px;
+  border-radius: 16px;
+  padding: 20px 26px;
   text-align: center;
-  box-shadow: 0 8px 32px #000a;
-  min-width: 220px;
+  box-shadow: 0 8px 40px #000c;
+  min-width: 300px;
+  max-width: 440px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  position: relative;
+  pointer-events: auto;        /* buttons inside are clickable */
+}
+
+/* ── Countdown timer (top-right corner of the overlay) ──────────────────── */
+#ao-timer {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+}
+#timer-secs {
+  font-size: .68rem;
+  font-weight: 700;
+  color: #f2c14e;
+  line-height: 1;
+}
+
+/* ── Interactive section (challenge / modifier / choice buttons) ─────────── */
+#ao-interactive {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+}
+#ao-interactive .prompt-title {
+  font-weight: 600;
+  font-size: .95rem;
+  color: #eef2ee;
+  margin-bottom: 4px;
+}
+#ao-interactive .hint {
+  font-size: .8rem;
+  color: #87ab92;
+  margin: 0;
+}
+#ao-interactive .modifier-opts {
+  justify-content: center;
+  width: 100%;
+}
+#ao-interactive .card-row {
+  justify-content: center;
+}
+
+/* ── "Alice is attacking Anuran Cauldron" line ───────────────────────────── */
+#ao-label {
+  font-size: .8rem;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: #8fbf9c;
+}
+
+/* ── Card strip: thumbnail on the left, name + desc on the right ─────────── */
+.ao-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  text-align: left;
+}
+.ao-card-img {
+  width: 72px;
+  height: 123px;           /* 500×853 ratio rounded */
+  object-fit: cover;
+  border-radius: 7px;
+  flex-shrink: 0;
+  box-shadow: 0 2px 10px #0007;
+}
+.ao-card-info { flex: 1; }
+.ao-card-name {
+  font-weight: 700;
+  font-size: 1rem;
+  margin-bottom: 6px;
+  color: #eef2ee;
+}
+.ao-card-desc {
+  font-size: .82rem;
+  color: #b5d4be;
+  line-height: 1.4;
+}
+
+/* ── Dice section (only during ROLL_PENDING) ─────────────────────────────── */
+#ao-dice-section {
+  border-top: 1px solid #2f5d40;
+  padding-top: 12px;
 }
 #roll-who {
-  font-size: .85rem;
+  font-size: .78rem;
   color: #8fbf9c;
   margin-bottom: 10px;
   text-transform: uppercase;
@@ -218,6 +311,126 @@ button:disabled { background: #2c4636; color: #6f8a78; cursor: not-allowed; }
   font-size: 1.5rem;
   font-weight: 700;
   color: #f2c14e;
+}
+
+/* ── Challenge side-by-side roll display ─────────────────────────────────── */
+.challenge-rolls {
+  display: flex;
+  gap: 24px;
+  justify-content: center;
+  align-items: center;
+}
+.challenge-roll-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.challenge-roll-name {
+  font-size: .75rem;
+  color: #8fbf9c;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+.challenge-roll-total {
+  font-size: 2.4rem;
+  font-weight: 800;
+  color: #f2c14e;
+  line-height: 1;
+}
+.challenge-rolls::before {
+  content: "vs";
+  font-size: .85rem;
+  color: #5a8a68;
+  font-weight: 700;
+  order: 1;
+}
+.challenge-roll-col:first-child { order: 0; }
+.challenge-roll-col:last-child  { order: 2; }
+
+/* ── Hero + item stack in party ─────────────────────────────────────────── */
+.party-hero-stack {
+  position: relative;
+  width: 100px;
+  height: 170px;        /* hero 140px + 30px of item peeking below */
+  flex-shrink: 0;
+}
+
+/* Hero card: locked at top-left of the stack, sits above the item */
+.party-hero-stack > .card--img {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+}
+
+/* Item card: mostly under the hero — only the bottom 30px (description strip) peeks out */
+.party-item-card {
+  position: absolute !important;
+  top: 110px;
+  left: 0;
+  z-index: 1;
+  transition: transform 0.2s ease;
+  cursor: pointer;
+}
+
+/* On hover: slide the item up so it's readable above the hero.
+   Also override the global scale(2) hover — we want a slide, not a zoom. */
+.party-item-card.card--img:hover {
+  transform: translateY(-120px) !important;
+  z-index: 15;
+  box-shadow: 0 10px 30px #000c;
+}
+
+/* ── Discard pile modal ──────────────────────────────────────────────────── */
+.pill--btn { cursor: pointer; user-select: none; }
+.pill--btn:hover { background: #2a5a3f; }
+
+#discard-modal {
+  position: fixed;
+  inset: 0;
+  background: #000a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 60;
+}
+#discard-modal-inner {
+  background: #1a3d28;
+  border: 2px solid #3a8d5a;
+  border-radius: 14px;
+  padding: 18px 22px;
+  max-width: min(90vw, 720px);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-shadow: 0 12px 48px #000e;
+}
+#discard-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 700;
+  font-size: 1rem;
+}
+#discard-close-btn {
+  background: none;
+  border: 1px solid #3a8d5a;
+  color: #eef2ee;
+  padding: 2px 8px;
+  font-size: .85rem;
+  border-radius: 6px;
+  margin: 0;
+}
+#discard-close-btn:hover { background: #2a5a3f; }
+#discard-card-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  overflow-y: auto;
+  max-height: calc(80vh - 80px);
+  padding: 4px 2px;
 }
 
 /* ── Error toast ─────────────────────────────────────────────────────────── */

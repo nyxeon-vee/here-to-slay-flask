@@ -40,7 +40,7 @@
       <span id="phase-pill" class="pill"></span>
       <span id="turn-pill" class="pill"></span>
       <span class="pill">Deck: <b id="deck-count">0</b></span>
-      <span class="pill">Discard: <span id="discard-top">—</span></span>
+      <span class="pill pill--btn" id="discard-pill">Discard: <span id="discard-top">—</span></span>
     </header>
 
     <!-- Contextual banner: whose turn / challenge window / modifier / prompt -->
@@ -75,14 +75,44 @@
     </section>
   </div>
 
+  <!-- ── Discard pile modal ────────────────────────────────────────────────── -->
+  <div id="discard-modal" class="hidden">
+    <div id="discard-modal-inner">
+      <div id="discard-modal-header">
+        <span>Discard Pile</span>
+        <button id="discard-close-btn">✕</button>
+      </div>
+      <div id="discard-card-grid"></div>
+    </div>
+  </div>
+
   <div id="error-toast" class="hidden"></div>
 
-  <!-- ── Roll overlay: floats centred on screen during ROLL_PENDING ──────── -->
-  <div id="roll-overlay" class="hidden">
-    <div id="roll-overlay-inner">
-      <div id="roll-who"></div>
-      <div id="roll-dice"></div>
-      <div id="roll-total"></div>
+  <!-- ── Action overlay: floats centred, shown for all non-ACTION phases ──── -->
+  <div id="action-overlay" class="hidden">
+    <div id="action-overlay-inner">
+      <!-- countdown timer circle (top-right corner) -->
+      <div id="ao-timer" class="hidden">
+        <svg viewBox="0 0 36 36" width="46" height="46">
+          <circle cx="18" cy="18" r="15.9" fill="none" stroke="#2a5035" stroke-width="3.5"/>
+          <circle id="timer-arc" cx="18" cy="18" r="15.9" fill="none" stroke="#f2c14e"
+            stroke-width="3.5" stroke-dasharray="100 0" stroke-linecap="round"
+            transform="rotate(-90 18 18)"/>
+        </svg>
+        <span id="timer-secs"></span>
+      </div>
+      <!-- who + what they're doing -->
+      <div id="ao-label"></div>
+      <!-- card being played / contested / rolled for -->
+      <div id="ao-card-area"></div>
+      <!-- dice (challenge always; hero/monster only during ROLL_PENDING) -->
+      <div id="ao-dice-section" class="hidden">
+        <div id="roll-who"></div>
+        <div id="roll-dice"></div>
+        <div id="roll-total"></div>
+      </div>
+      <!-- interactive: challenge/modifier/choice buttons live here -->
+      <div id="ao-interactive"></div>
     </div>
   </div>
 

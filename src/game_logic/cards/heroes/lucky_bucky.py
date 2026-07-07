@@ -25,7 +25,9 @@ class LuckyBucky(Hero):
         # 2nd call: target is chosen — pull a random card from their hand.
         if not game.collected_cards:
             if not game.target_player.hand:
+                # Target has no cards — ability fizzles, clean up and finish.
                 game.target_player = None
+                game.pending_choice = None
                 return
             pulled = random.choice(game.target_player.hand)
             game.target_player.discard(pulled)
@@ -34,10 +36,12 @@ class LuckyBucky(Hero):
                 # Not a hero — just take it, done.
                 player.hand.append(pulled)
                 game.target_player = None
+                game.pending_choice = None
                 return
 
             # Is a hero — ask if the player wants to play it immediately.
             game.collected_cards = [pulled]
+            game.message = "Do you want to use the hero that you pulled?"
             game.pending_choice = ChoiceType.CHOOSE_YES_NO
             game.phase = Phase.AWAITING_CHOICE
             return
@@ -47,6 +51,7 @@ class LuckyBucky(Hero):
         # game.target_*/pending_choice fields (same reason as Fuzzy Cheeks).
         pulled = game.collected_cards[0]
         game.collected_cards = []
+        game.message = None
         game.target_player = None
         game.pending_choice = None
         game.choice, answered_yes = None, game.choice == 0

@@ -22,6 +22,7 @@ class BearClaw(Hero):
                 game.pending_choice = None
                 return
             game.pending_choice = ChoiceType.CHOOSE_TARGET_PLAYER
+            game.message = "Choose a player pull a card from"
             game.phase = Phase.AWAITING_CHOICE
             return
 
@@ -44,5 +45,6 @@ class BearClaw(Hero):
             game.target_player.hand.remove(second_card)
             player.hand.append(second_card)
 
+        game.message = None
         game.target_player = None
         game.pending_choice = None  # signal "done" so submit_choice finalizes

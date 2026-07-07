@@ -17,7 +17,13 @@ class FuzzyCheeks(Hero):
         # 1st call: draw a card, then ask which hand card to play for free.
         if game.pending_choice is None:
             player.draw(game.deck)
+            heroes_in_hand = [c for c in player.hand if isinstance(c, Hero)]
+            if not heroes_in_hand:
+                # Drew a card but no heroes to play — ability fizzles cleanly.
+                game.pending_choice = None
+                return
             game.pending_choice = ChoiceType.CHOOSE_CARD_FROM_OWN_HAND
+            game.message = "Choose a hero to play immedietly!"
             game.phase = Phase.AWAITING_CHOICE
             return
         # 2nd call: clear the scratchpad FIRST, then play the chosen hero. Order
@@ -26,5 +32,6 @@ class FuzzyCheeks(Hero):
         chosen = game.target_card
         game.target_card = None
         game.pending_choice = None
+        game.message = None
         if isinstance(chosen, Hero):
             game._execute_card(player, chosen)
