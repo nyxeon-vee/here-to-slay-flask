@@ -1,7 +1,8 @@
 from game_logic.cards.registry import register
-from game_logic.base import GameEvent, Monster, RollThreshold, RollCondition, PartyRequirement
-from game_logic.game import Game, ChoiceType, Phase
+from game_logic.base import GameEvent, Hero, Monster, RollThreshold, RollCondition, PartyRequirement, ChoiceType
+from game_logic.game import Game
 from game_logic.player import Player
+
 @register("abyss_queen")
 class AbyssQueen(Monster):
     def __init__(self):
@@ -14,24 +15,16 @@ class AbyssQueen(Monster):
             fail_description    = "SACRIFICE a Hero card",
             party_requirement   = PartyRequirement(2, tuple())
         )
-    
-    # Failure penalty: sacrifice a hero (same re-entrant shape as Arctic Aries).
-    def apply_failure(self, game: Game, player: Player) -> None:
-        if game.pending_choice is None:
-            game.pending_choice = ChoiceType.CHOOSE_HERO_FROM_OWN_PARTY
-            game.phase = Phase.AWAITING_CHOICE
-            game.message = "Choose a Hero to sacrifice"
-            return
-        if game.target_hero:
-            player.remove_from_party(game.target_hero)
-            game.discard_pile.append(game.target_hero)
-            game.target_hero = None
-            game.pending_choice = None
-            game.message = None
 
-    # Passive: when an OPPONENT plays a Modifier on your roll, +1. play_modifier
-    # only fires MODIFIER_PLAYED when someone else modifies your roll, so the
-    # "another player" condition is already handled there — no check needed here.
-    def on_event(self, event: GameEvent, game: Game, player: Player) -> None:
+    def apply_failure(self, game: Game, player: Player):
+        if not any(isinstance(c, Hero) for c in player.party):
+            return  # no heroes to sacrifice — fizzle
+        game.message = "Choose a hero to sacrifice"
+        sacrifice = yield ChoiceType.CHOOSE_HERO_FROM_OWN_PARTY
+        player.remove_from_party(sacrifice)
+        game.discard_pile.append(sacrifice)
+        game.message = None
+
+    def on_event(self, event: GameEvent, game: Game, player: Player) -> None:  # noqa: ARG002
         if event == GameEvent.MODIFIER_PLAYED:
             player.current_roll += 1

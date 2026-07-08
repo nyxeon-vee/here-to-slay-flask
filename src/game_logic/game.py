@@ -58,9 +58,10 @@ class Game():
 
         # ── Re-entry bookmark ────────────────────────────────────────────────
         #    When an effect pauses (phase == AWAITING_CHOICE) this records WHAT
-        #    to re-run once the answer arrives: (kind, card, player). submit_choice
-        #    reads it to resume the exact method that paused. None when not paused.
-        self.paused: tuple[str, Card, Player] | None = None
+        #    to resume once the answer arrives.
+        #    Generator abilities (heroes, monsters): (kind, generator)   — 2-tuple
+        #    Magic apply (old re-entrant style):      (kind, card, player) — 3-tuple
+        self.paused: tuple | None = None
 
         # ── Roll context: set when ROLL_PENDING, cleared when roll resolves ──
         #    Carries enough info to finish the roll after the modifier window.
@@ -75,6 +76,64 @@ class Game():
         if player.action_points < amount:
             raise PlayerNotEnoughActionPointsError
         player.action_points -= amount
+
+    # ── Generator-based ability helpers ────────────────────────────────────
+
+    def _get_choice_answer(self):
+        """Extract the typed answer from the scratchpad based on pending_choice.
+
+        For most types the answer is a single object.  For
+        CHOOSE_HERO_FROM_OPPONENT_PARTY the UI sets BOTH target_player and
+        target_hero, so we return them as a tuple that the generator can
+        unpack with  `target_player, target_hero = yield ...`.
+        """
+        ct = self.pending_choice
+        if ct == ChoiceType.CHOOSE_YES_NO:
+            return self.choice == 0           # True = Yes, False = No
+        if ct == ChoiceType.CHOOSE_TARGET_PLAYER:
+            return self.target_player
+        if ct == ChoiceType.CHOOSE_HERO_FROM_OPPONENT_PARTY:
+            return (self.target_player, self.target_hero)
+        if ct in (ChoiceType.CHOOSE_HERO_FROM_OWN_PARTY, ChoiceType.CHOOSE_HERO_FROM_ANY_PARTY):
+            return self.target_hero
+        if ct in (ChoiceType.CHOOSE_CARD_FROM_OWN_HAND, ChoiceType.CHOOSE_CARD_FROM_POOL):
+            return self.target_card
+        if ct == ChoiceType.CHOOSE_NUMBER:
+            return self.choice
+        return None
+
+    def _start_generator(self, kind: str, gen) -> bool:
+        """Drive a newly-created generator to its first yield.
+
+        Returns True if the generator paused (needs player input) — the caller
+        should return immediately to let the UI collect the answer.
+        Returns False if the generator finished without pausing — the caller
+        should continue with finalization.
+        """
+        try:
+            choice_type = next(gen)
+            self.pending_choice = choice_type
+            self.phase = Phase.AWAITING_CHOICE
+            self.paused = (kind, gen)
+            return True
+        except StopIteration:
+            return False
+
+    def _finalize_kind(self, kind: str) -> None:
+        """Transition to the right phase after a generator finishes.
+
+        If an inner hero triggered a new ROLL_PENDING (e.g. Fuzzy Cheeks
+        played another hero via _execute_card), we leave the phase alone —
+        finish_pending_roll will call _on_card_resolved when that rolls resolves.
+        """
+        if self.pending_roll_context:
+            return  # inner hero roll is in progress; it will finalize later
+        if kind in ("hero_play", "magic_play"):
+            self._on_card_resolved()
+        else:
+            self.phase = Phase.ACTION
+
+    # ───────────────────────────────────────────────────────────────────────
 
     def _execute_card(self, player: Player, card: Card) -> None:
         # Thin indirection over card.apply so callers read clearly and we have
@@ -262,41 +321,54 @@ class Game():
         self.phase = Phase.ACTION
 
     def submit_choice(self) -> None:
-        """Resume a paused effect after the UI has filled in the answer.
+        """Resume a paused effect after the UI has filled in the scratchpad.
 
-        The socket layer writes the player's answer into the scratchpad
-        (target_player / target_hero / target_card / choice) and then calls this.
-        We re-run whichever method paused, using the bookmark left in self.paused:
+        Two paths depending on what self.paused holds:
 
-          hero_play / party_ability -> the hero's use_ability
-          magic_play                -> the magic card's apply
-          monster_failure           -> the monster's apply_failure
+          (kind, generator)       — hero / monster generator ability.
+            Extract the typed answer, clear the scratchpad so the generator
+            gets a clean slate, then send the answer via gen.send().
+            If the generator yields again it needs more input; if it raises
+            StopIteration it's done and we finalize the turn.
 
-        Re-entrant effects signal completion by clearing pending_choice (None).
-        If it's still set, the effect paused AGAIN for another answer (e.g. a
-        multi-player discard) — we stay in AWAITING_CHOICE and wait for the next
-        submit_choice. Only when it's truly done do we finalize.
+          (kind, card, player)    — magic apply (old re-entrant style).
+            Re-call card.apply() and check pending_choice to see if it paused
+            again (same as before).
         """
         if self.phase != Phase.AWAITING_CHOICE or self.paused is None:
             raise InvalidPhaseError("No choice is pending")
 
-        kind, card, player = self.paused
-        if kind in ("hero_play", "party_ability"):
-            card.use_ability(self, player)   # type: ignore[attr-defined]  # Hero
-        elif kind == "magic_play":
-            card.apply(self, player)
-        elif kind == "monster_failure":
-            card.apply_failure(self, player)  # type: ignore[attr-defined]  # Monster
+        kind = self.paused[0]
 
-        if self.pending_choice is not None:
-            return  # effect paused again; keep self.paused and wait for next answer
-
-        # Effect finished. Drop the bookmark and return control to the turn.
-        self.paused = None
-        if kind in ("hero_play", "magic_play"):
-            self._on_card_resolved()      # fires MAGIC_PLAYED + clears pending_card
+        if len(self.paused) == 2:
+            # ── Generator path (heroes, monsters) ──────────────────────────
+            _, gen = self.paused
+            answer = self._get_choice_answer()
+            # Clear the choice scratchpad — generators use local variables and
+            # must not see stale values from a previous yield.
+            self.pending_choice = None
+            self.target_card = None
+            self.target_player = None
+            self.target_hero = None
+            self.choice = None
+            self.message = None
+            try:
+                choice_type = gen.send(answer)
+                # Generator paused again — record what kind of answer it wants.
+                self.pending_choice = choice_type
+                self.phase = Phase.AWAITING_CHOICE
+                # self.paused stays (kind, gen) — same generator continues
+            except StopIteration:
+                self.paused = None
+                self._finalize_kind(kind)
         else:
-            self.phase = Phase.ACTION
+            # ── Old re-entrant path (magic apply) ──────────────────────────
+            _, card, player = self.paused
+            card.apply(self, player)
+            if self.pending_choice is not None:
+                return  # paused again; keep self.paused
+            self.paused = None
+            self._on_card_resolved()
 
     def play_modifier(self, player: Player, card: Modifier, choice: int = 0) -> None:
         # Modifiers adjust a roll that just happened (the ROLL_PENDING window).
@@ -376,15 +448,13 @@ class Game():
         if t in ("hero_play", "hero_party"):
             hero: Hero = ctx["hero"]
             player: Player = ctx["player"]
-            hero.finish_roll(self, player)
-            if self.pending_choice is not None:
-                kind = "hero_play" if t == "hero_play" else "party_ability"
-                self.paused = (kind, hero, player)
-                return
-            if t == "hero_play":
-                self._on_card_resolved()
-            else:
-                self.phase = Phase.ACTION
+            kind = "hero_play" if t == "hero_play" else "party_ability"
+            # finish_roll returns the generator from use_ability (on a WIN), or
+            # None (on a LOSE — ability doesn't run, item passive fires instead).
+            gen = hero.finish_roll(self, player)
+            if gen is not None and self._start_generator(kind, gen):
+                return  # generator paused for player input
+            self._finalize_kind(kind)
 
         elif t == "monster_attack":
             monster: Monster = ctx["monster"]
@@ -395,10 +465,9 @@ class Game():
                 player.add_to_party(monster)
                 self.refill_monster_row()
             elif outcome == RollOutcome.LOSE:
-                monster.apply_failure(self, player)
-                if self.pending_choice is not None:
-                    self.paused = ("monster_failure", monster, player)
-                    return
+                gen = monster.apply_failure(self, player)
+                if self._start_generator("monster_failure", gen):
+                    return  # generator paused for player input
             self.phase = Phase.ACTION
 
     def use_party_ability(self, player: Player, card: Hero) -> None:

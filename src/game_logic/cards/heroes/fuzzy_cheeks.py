@@ -1,7 +1,8 @@
 from game_logic.cards.registry import register
-from game_logic.base import Hero, HeroClass, RollThreshold, RollCondition
-from game_logic.game import Game, Phase, ChoiceType
+from game_logic.base import Hero, HeroClass, RollThreshold, RollCondition, ChoiceType
+from game_logic.game import Game
 from game_logic.player import Player
+
 @register("fuzzy_cheeks")
 class FuzzyCheeks(Hero):
     def __init__(self):
@@ -13,25 +14,13 @@ class FuzzyCheeks(Hero):
             activation_roll = RollThreshold(9, RollCondition.AT_LEAST),
         )
 
-    def use_ability(self, game: Game, player: Player) -> None:
-        # 1st call: draw a card, then ask which hand card to play for free.
-        if game.pending_choice is None:
-            player.draw(game.deck)
-            heroes_in_hand = [c for c in player.hand if isinstance(c, Hero)]
-            if not heroes_in_hand:
-                # Drew a card but no heroes to play — ability fizzles cleanly.
-                game.pending_choice = None
-                return
-            game.pending_choice = ChoiceType.CHOOSE_CARD_FROM_OWN_HAND
-            game.message = "Choose a hero to play immedietly!"
-            game.phase = Phase.AWAITING_CHOICE
-            return
-        # 2nd call: clear the scratchpad FIRST, then play the chosen hero. Order
-        # matters — _execute_card runs another hero's apply(), which reuses these
-        # same game.target_*/pending_choice fields, so they must be reset before.
-        chosen = game.target_card
-        game.target_card = None
-        game.pending_choice = None
+    def use_ability(self, game: Game, player: Player):
+        player.draw(game.deck)
+        if not any(isinstance(c, Hero) for c in player.hand):
+            return  # drew a card but no heroes to play — fizzle
+        game.message = "Choose a hero to play immediately!"
+        chosen = yield ChoiceType.CHOOSE_CARD_FROM_OWN_HAND
+        # Clear message BEFORE _execute_card — the inner hero reuses game.message.
         game.message = None
         if isinstance(chosen, Hero):
             game._execute_card(player, chosen)

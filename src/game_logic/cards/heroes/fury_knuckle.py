@@ -1,8 +1,9 @@
 from game_logic.cards.registry import register
-from game_logic.base import Hero, HeroClass, RollThreshold, RollCondition, Challenge
-from game_logic.game import Game, Phase, ChoiceType
+from game_logic.base import Hero, HeroClass, RollThreshold, RollCondition, Challenge, ChoiceType
+from game_logic.game import Game
 from game_logic.player import Player
 import random
+
 @register("fury_knuckle")
 class FuryKnuckle(Hero):
     def __init__(self):
@@ -14,32 +15,19 @@ class FuryKnuckle(Hero):
             activation_roll = RollThreshold(5, RollCondition.AT_LEAST),
         )
 
-    def use_ability(self, game: Game, player: Player) -> None:
-        # Same shape as Bear Claw, but the bonus pull triggers on a Challenge
-        # card instead of a Hero. 1st call asks for a target; 2nd call steals.
-        if game.target_player is None:
-            if not any(p.hand for p in game.players if p is not player):
-                game.pending_choice = None
-                return
-            game.pending_choice = ChoiceType.CHOOSE_TARGET_PLAYER
-            game.phase = Phase.AWAITING_CHOICE
-            game.message = "Choose player to pull a card from"
+    def use_ability(self, game: Game, player: Player):
+        if not any(p.hand for p in game.players if p is not player):
+            return  # no one has cards — fizzle
+        game.message = "Choose a player to pull a card from"
+        target = yield ChoiceType.CHOOSE_TARGET_PLAYER
+        if not target.hand:
+            game.message = None
             return
-
-        if not game.target_player.hand:
-            game.target_player = None
-            game.pending_choice = None
-            return
-
-        first_card = random.choice(game.target_player.hand)
-        game.target_player.hand.remove(first_card)
-        player.hand.append(first_card)
-
-        if isinstance(first_card, Challenge) and game.target_player.hand:
-            second_card = random.choice(game.target_player.hand)
-            game.target_player.hand.remove(second_card)
-            player.hand.append(second_card)
-
-        game.target_player = None
-        game.pending_choice = None  # signal "done" so submit_choice finalizes
+        first = random.choice(target.hand)
+        target.hand.remove(first)
+        player.hand.append(first)
+        if isinstance(first, Challenge) and target.hand:
+            second = random.choice(target.hand)
+            target.hand.remove(second)
+            player.hand.append(second)
         game.message = None

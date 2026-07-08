@@ -20,6 +20,7 @@ from __future__ import annotations
 # we can hint Game/Player without importing them at runtime (avoids a cycle).
 from typing import TYPE_CHECKING, NamedTuple
 if TYPE_CHECKING:
+    from typing import Generator
     from game_logic.game import Game
     from game_logic.player import Player
 from abc import ABC, abstractmethod
@@ -190,34 +191,53 @@ class Hero(Card):
             player.party_leader.on_event(GameEvent.HERO_ROLL, game, player)
         game.pending_roll_context = {"type": context_type, "hero": self, "player": player}
 
-    def finish_roll(self, game: Game, player: Player) -> None:
+    def finish_roll(self, game: Game, player: Player):
         """Resolve this hero's roll after the modifier window has closed.
 
         Called by game.finish_pending_roll(). WIN fires party-monster events then
-        runs the ability; LOSE fires the equipped item's passive.
+        starts the ability generator; LOSE fires the equipped item's passive.
+
+        Returns the generator from use_ability on a WIN, or None on a LOSE.
+        game.finish_pending_roll() drives the returned generator.
         """
         if self.evaluate_roll(player.current_roll) == RollOutcome.WIN:
             for party_card in player.party:
                 if isinstance(party_card, Monster):
                     party_card.on_event(GameEvent.SUCCESSFUL_HERO_ROLL, game, player)
-            self.use_ability(game, player)
+            return self.use_ability(game, player)
         else:
             if self.item is not None:
                 self.item.on_event(GameEvent.UNSUCCESSFUL_HERO_ROLL, game, player)
+            return None
 
     @abstractmethod
-    def use_ability(self, game: Game, player: Player) -> None:
+    def use_ability(self, game: Game, player: Player) -> Generator | None:
         """This hero's effect, run once its roll succeeds.
 
-        IMPORTANT — abilities are RE-ENTRANT. If an ability needs player input it
-        cannot block; instead it:
-          - sets game.pending_choice (what kind of answer it needs),
-          - sets game.phase = AWAITING_CHOICE, and
-          - returns.
-        The outer layer collects the answer (into game.target_*/choice) and calls
-        use_ability AGAIN. So an ability that asks N questions is entered N+1
-        times, and must read game.pending_choice / game.target_* to figure out
-        which step it's resuming. game.pending_choice is None on the first entry.
+        Implement as a GENERATOR FUNCTION (use `yield` to pause for input):
+
+            def use_ability(self, game, player):
+                target = yield ChoiceType.CHOOSE_TARGET_PLAYER
+                # `target` is the Player the user picked — use it directly
+                player.hand, target.hand = target.hand, player.hand
+
+        The engine calls next(gen) to start and gen.send(answer) to resume.
+        Each `yield ChoiceType.X` suspends execution; the answer is sent back
+        as the value of the yield expression (typed per ChoiceType):
+          CHOOSE_YES_NO                   -> bool (True = Yes)
+          CHOOSE_TARGET_PLAYER            -> Player
+          CHOOSE_HERO_FROM_OPPONENT_PARTY -> (Player, Hero)  # unpack with two names
+          CHOOSE_HERO_FROM_OWN_PARTY      -> Hero
+          CHOOSE_CARD_FROM_OWN_HAND       -> Card
+          CHOOSE_CARD_FROM_POOL           -> Card
+          CHOOSE_NUMBER                   -> int
+
+        If the ability needs no input, just write a normal function body (no
+        yield) — it still works; the engine handles both generator and plain.
+
+        Set game.message before each yield to show a prompt title in the UI.
+        For multi-player effects set game.pending_choice_player before each yield
+        so the UI knows who should answer; clear it at the end.
         """
         ...
 
@@ -244,13 +264,18 @@ class Monster(Card):
         self.party_requirement = party_requirement
         self.fail_description = fail_description
     @abstractmethod
-    def apply_failure(self, game: Game, player: Player) -> None:
+    def apply_failure(self, game: Game, player: Player) -> Generator | None:
         """Penalty when a slay attempt rolls in the 'fail' band.
 
-        Re-entrant just like Hero.use_ability — most monsters make you sacrifice
-        a hero, which needs a CHOOSE_HERO_FROM_OWN_PARTY prompt, so this method
-        is entered again after the player picks. (fail_description is the
-        human-readable version of this penalty for the UI.)
+        Implement as a generator function (same pattern as Hero.use_ability).
+        Most monsters sacrifice a hero:
+
+            def apply_failure(self, game, player):
+                sacrifice = yield ChoiceType.CHOOSE_HERO_FROM_OWN_PARTY
+                player.remove_from_party(sacrifice)
+                game.discard_pile.append(sacrifice)
+
+        (fail_description is the human-readable version of this penalty for the UI.)
         """
 
     def apply(self, game: Game, player: Player) -> None:
