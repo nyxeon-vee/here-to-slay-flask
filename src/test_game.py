@@ -120,6 +120,8 @@ print(f"  Playing {hero_card.name}...")
 game.play_card(alice, hero_card)        # opens the challenge window (no resolve yet)
 assert_phase(game, Phase.CHALLENGE_WINDOW)
 game.resolve_pending_card()             # simulate the window expiring with no challenge
+assert_phase(game, Phase.ROLL_PENDING)  # hero rolled; modifier window open
+game.finish_pending_roll()              # simulate the modifier window expiring
 print(f"  Alice rolled: {alice.current_roll}")
 assert hero_card in alice.party, "Hero should be in party"
 assert hero_card not in alice.hand, "Hero should be out of hand"
@@ -138,6 +140,8 @@ monster = game.monster_row[0]
 ap_before = alice.action_points
 print(f"  Attacking {monster.name}...")
 game.attack_monster(alice, monster)
+assert_phase(game, Phase.ROLL_PENDING)  # modifier window open
+game.finish_pending_roll()              # window expires -> outcome applies
 print(f"  Alice rolled: {alice.current_roll}")
 assert monster in alice.party, "Monster should be in Alice's party"
 assert monster not in game.monster_row, "Monster should leave row"
@@ -191,7 +195,8 @@ hero_card = next(c for c in carol.hand if isinstance(c, StubHero))
 import random
 random.seed(42)
 game2.play_card(carol, hero_card)       # opens challenge window
-game2.resolve_pending_card()            # window expires -> hero resolves & rolls
+game2.resolve_pending_card()            # window expires -> hero rolls (ROLL_PENDING)
+game2.finish_pending_roll()             # modifier window expires -> ability runs
 roll = carol.current_roll
 print(f"  Roll with Charismatic Song leader: {roll}")
 print(f"  (base roll + 1 from leader)")
@@ -261,8 +266,10 @@ game4.pending_card = hero9; game4.pending_player = gwen
 
 game4.start_challenge(hank); hank.current_roll = 2     # challenger rolls low...
 game4.close_challenge_roll_1(); gwen.current_roll = 12  # ...challenged rolls high
-game4.close_challenge_roll_2()                          # challenger LOSES
+game4.close_challenge_roll_2()                          # challenger LOSES -> card resolves
 assert hero9 in gwen.party and hero9 not in gwen.hand, "card should resolve into party"
+assert_phase(game4, Phase.ROLL_PENDING)  # the resolved hero rolled; modifier window open
+game4.finish_pending_roll()
 assert_phase(game4, Phase.ACTION)
 print("  challenger lost -> hero resolved into party ✓")
 print("  PASS")

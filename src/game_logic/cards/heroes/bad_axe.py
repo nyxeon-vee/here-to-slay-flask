@@ -15,13 +15,16 @@ class BadAxe(Hero):
         )
 
     def use_ability(self, game: Game, player: Player):
-        if not any(
-            any(isinstance(c, Hero) for c in p.party)
-            for p in game.players if p is not player
-        ):
-            return  # no targets — fizzle
+        if not game.has_destroyable_opponent_heroes(player):
+            game.log_event(f"No destroyable heroes — {self.name}'s ability fizzles")
+            return
+        # The UI greys out destroy_protected parties, but a stale/naughty client
+        # could still submit one — re-prompt until the target is valid.
         game.message = "Choose a hero to destroy!"
-        target_player, target_hero = yield ChoiceType.CHOOSE_HERO_FROM_OPPONENT_PARTY
-        target_player.remove_from_party(target_hero)
-        game.discard_pile.append(target_hero)
+        while True:
+            target_player, target_hero = yield ChoiceType.CHOOSE_HERO_TO_DESTROY
+            if not target_player.destroy_protected:
+                break
+            game.message = f"{target_player.name}'s party is protected — choose another hero"
+        game.destroy_hero(target_player, target_hero)
         game.message = None

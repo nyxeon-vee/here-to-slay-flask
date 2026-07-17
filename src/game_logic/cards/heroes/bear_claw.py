@@ -17,6 +17,7 @@ class BearClaw(Hero):
 
     def use_ability(self, game: Game, player: Player):
         if not any(p.hand for p in game.players if p is not player):
+            game.log_event(f"No one has cards! {self.name}'s ability fizzled!")
             return  # no one has cards — fizzle
         game.message = "Choose a player to pull a card from"
         target = yield ChoiceType.CHOOSE_TARGET_PLAYER

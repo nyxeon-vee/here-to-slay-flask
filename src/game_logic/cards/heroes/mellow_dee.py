@@ -25,7 +25,8 @@ class MellowDee(Hero):
         play_it = yield ChoiceType.CHOOSE_YES_NO
         # Clear message BEFORE _execute_card — the inner hero reuses game.message.
         game.message = None
+        # The card goes to the hand either way — Hero.apply expects to move it
+        # from hand to party, so playing it without this step would crash.
+        player.hand.append(drawn)
         if play_it:
             game._execute_card(player, drawn)
-        else:
-            player.hand.append(drawn)

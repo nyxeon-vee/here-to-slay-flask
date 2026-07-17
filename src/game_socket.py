@@ -30,7 +30,7 @@ Server -> client events:  game_state (personalized per socket), error
 from flask import request
 from flask_socketio import SocketIO, join_room, emit
 
-from game_logic.base import Phase
+from game_logic.base import ChoiceType, Phase
 from game_logic.exceptions import (
     InvalidPhaseError,
     CardNotInHandError,
@@ -255,14 +255,17 @@ def register_handlers(socketio: SocketIO) -> None:
 
             CHOOSE_TARGET_PLAYER            -> { target_player_id }
             CHOOSE_HERO_FROM_OPPONENT_PARTY -> { target_player_id, target_hero_uid }
+            CHOOSE_HERO_TO_STEAL            -> { target_player_id, target_hero_uid }
+            CHOOSE_HERO_TO_DESTROY          -> { target_player_id, target_hero_uid }
             CHOOSE_HERO_FROM_OWN_PARTY      -> { target_hero_uid }
+            CHOOSE_CURSED_ITEM_FROM_OWN_PARTY -> { target_hero_uid, target_card_uid }
             CHOOSE_CARD_FROM_OWN_HAND       -> { target_card_uid }
             CHOOSE_CARD_FROM_POOL           -> { target_card_uid }
             CHOOSE_YES_NO                   -> { choice: 0|1 }
             CHOOSE_NUMBER                   -> { choice: int }
         """
         room, player = _ctx()
-        if not room:
+        if not room or player is None:
             return _error("You are not in a room")
         game = room.game
         if game.pending_choice is None:
@@ -284,7 +287,22 @@ def register_handlers(socketio: SocketIO) -> None:
         if "choice" in data:
             game.choice = int(data["choice"])
 
-        _do(room, socketio, game.submit_choice)
+        # Validate card answers against where the prompt is actually picking
+        # from. find_card searches EVERY pile, so without this a forged uid
+        # could feed the paused ability a card from an opponent's hand. Reject
+        # here and the prompt simply stays open.
+        if game.pending_choice == ChoiceType.CHOOSE_CARD_FROM_POOL \
+                and game.target_card not in game.collected_cards:
+            return _error("That card is not one of the offered choices")
+        if game.pending_choice == ChoiceType.CHOOSE_CARD_FROM_OWN_HAND \
+                and game.target_card not in player.hand:  # player IS answerer (checked above)
+            return _error("That card is not in your hand")
+
+        # The answer may resume an ability that plays ANOTHER hero (Mellow Dee,
+        # Fuzzy Cheeks, ...), leaving the game in a fresh ROLL_PENDING — open its
+        # modifier-window timer or the game soft-locks. No-op for other phases.
+        if _do(room, socketio, game.submit_choice):
+            _open_timed_window(room, socketio)
 
 
 # ── Small shared helper ──────────────────────────────────────────────────────

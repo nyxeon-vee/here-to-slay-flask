@@ -21,8 +21,7 @@ class AbyssQueen(Monster):
             return  # no heroes to sacrifice — fizzle
         game.message = "Choose a hero to sacrifice"
         sacrifice = yield ChoiceType.CHOOSE_HERO_FROM_OWN_PARTY
-        player.remove_from_party(sacrifice)
-        game.discard_pile.append(sacrifice)
+        game.sacrifice_hero(player, sacrifice)
         game.message = None
 
     def on_event(self, event: GameEvent, game: Game, player: Player) -> None:  # noqa: ARG002

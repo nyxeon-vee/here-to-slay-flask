@@ -92,7 +92,8 @@ def _action_context(game: Game) -> dict | None:
 
     # A card effect is paused waiting for player input — keep the card visible.
     if phase == Phase.AWAITING_CHOICE and game.paused:
-        _kind, card, player = game.paused
+        card   = game.paused["card"]
+        player = game.paused["player"]
         return {
             "phase":       "awaiting_choice",
             "player_name": player.name,
@@ -110,6 +111,10 @@ def serialize_player(player: Player, reveal_hand: bool) -> dict:
         "name":          player.name,
         "action_points": player.action_points,
         "current_roll":  player.current_roll,
+        # Calming Voice / Mighty Blade: the UI greys this party out during
+        # steal / destroy prompts and shows a badge.
+        "steal_protected":   player.steal_protected,
+        "destroy_protected": player.destroy_protected,
         "party":         [c.to_dict() for c in player.party],
         "party_leader":  player.party_leader.to_dict() if player.party_leader else None,
         "hand_count":    len(player.hand),
@@ -160,4 +165,7 @@ def serialize_game(game: Game, viewer: Player) -> dict:
         "choice_message":    game.message,                    # optional prompt text set by the card
         # A temporary pool to choose from (Beary Wise, Call To The Fallen, ...).
         "collected_cards":   [c.to_dict() for c in game.collected_cards],
+
+        # ── Event log: public play-by-play for the "chat" panel ──────────────
+        "log":               game.event_log,
     }

@@ -51,14 +51,17 @@ class RollThreshold(NamedTuple):
 # writes the answer into game.target_*/choice and re-calls the card. See the
 # "re-entrant ability" note on Hero.use_ability below.
 class ChoiceType(Enum):
-    CHOOSE_HERO_FROM_OPPONENT_PARTY = auto()  # answer -> game.target_player + game.target_hero
-    CHOOSE_HERO_FROM_OWN_PARTY      = auto()  # answer -> game.target_hero
-    CHOOSE_HERO_FROM_ANY_PARTY      = auto()  # anwser -> game.target_hero
-    CHOOSE_TARGET_PLAYER            = auto()  # answer -> game.target_player
-    CHOOSE_CARD_FROM_OWN_HAND       = auto()  # answer -> game.target_card
-    CHOOSE_CARD_FROM_POOL           = auto()  # pick from game.collected_cards -> game.target_card
-    CHOOSE_YES_NO                   = auto()  # answer -> game.choice (0 = yes, 1 = no)
-    CHOOSE_NUMBER                   = auto()  # answer -> game.choice (an integer)
+    CHOOSE_HERO_FROM_OPPONENT_PARTY     = auto()  # answer -> game.target_player + game.target_hero
+    CHOOSE_HERO_TO_STEAL                = auto()  # same answer shape, but the UI greys out steal_protected parties
+    CHOOSE_HERO_TO_DESTROY              = auto()  # same answer shape, but the UI greys out destroy_protected parties
+    CHOOSE_CURSED_ITEM_FROM_OWN_PARTY   = auto()  # answer -> game.target_hero, game.target_card
+    CHOOSE_HERO_FROM_OWN_PARTY          = auto()  # answer -> game.target_hero
+    CHOOSE_HERO_FROM_ANY_PARTY          = auto()  # anwser -> game.target_hero
+    CHOOSE_TARGET_PLAYER                = auto()  # answer -> game.target_player
+    CHOOSE_CARD_FROM_OWN_HAND           = auto()  # answer -> game.target_card
+    CHOOSE_CARD_FROM_POOL               = auto()  # pick from game.collected_cards -> game.target_card
+    CHOOSE_YES_NO                       = auto()  # answer -> game.choice (0 = yes, 1 = no)
+    CHOOSE_NUMBER                       = auto()  # answer -> game.choice (an integer)
 
 # Passive-ability triggers. Game fires these at the relevant moment via
 # leader/monster.on_event(); a card's on_event checks the event and reacts.
@@ -108,13 +111,15 @@ class PartyRequirement(NamedTuple):
     min_heroes: int
     required_classes: tuple[HeroClass, ...]
 
-    def check(self, party: list, leader: Leader) -> bool:
-        """True if `party` (plus its `leader`) meets this requirement."""
+    def check(self, party: list, leader: Leader | None) -> bool:
+        """True if `party` (plus its `leader`, when assigned) meets this requirement."""
         hero_count = sum(isinstance(c, Hero) for c in party)
         if hero_count < self.min_heroes:
             return False
         # The leader's class also counts toward the required classes.
-        party_classes = {c.hero_class for c in party if isinstance(c, Hero)} | {leader.hero_class}
+        party_classes = {c.hero_class for c in party if isinstance(c, Hero)}
+        if leader is not None:
+            party_classes |= {leader.hero_class}
         return all(cls in party_classes for cls in self.required_classes)
     
 class Card(ABC):
@@ -128,7 +133,11 @@ class Card(ABC):
         super().__init__()
         
     @abstractmethod
-    def apply(self, game: Game, player: Player) -> None: ...
+    def apply(self, game: Game, player: Player) -> Generator | None:
+        """Play this card. Cards that need player input mid-effect (Magic like
+        Call To The Fallen) implement this as a generator — same yield protocol
+        as Hero.use_ability; the engine drives it. Others just run and return None."""
+        ...
 
     def on_event(self, event: "GameEvent", game: "Game", player: "Player") -> None:
         pass  # default: ignore all events; Monster/Leader/Item override selectively
@@ -187,8 +196,8 @@ class Hero(Card):
         self.was_used_this_turn = True
         game.phase = Phase.ROLL_PENDING
         game.roll_dice(player)
-        if player.party_leader:
-            player.party_leader.on_event(GameEvent.HERO_ROLL, game, player)
+        # Passives: leader (The Charismatic Song) AND party cards (Anuran Cauldron).
+        game._fire_roll_event(player, GameEvent.HERO_ROLL)
         game.pending_roll_context = {"type": context_type, "hero": self, "player": player}
 
     def finish_roll(self, game: Game, player: Player):

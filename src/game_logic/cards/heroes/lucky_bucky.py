@@ -34,7 +34,8 @@ class LuckyBucky(Hero):
         game.message = "Play the stolen hero immediately?"
         play_it = yield ChoiceType.CHOOSE_YES_NO
         game.message = None
+        # The card goes to the hand either way — Hero.apply expects to move it
+        # from hand to party, so playing it without this step would crash.
+        player.hand.append(pulled)
         if play_it:
             game._execute_card(player, pulled)
-        else:
-            player.hand.append(pulled)

@@ -1,5 +1,5 @@
 from game_logic.cards.registry import register
-from game_logic.base import Item, Phase, ChoiceType, GameEvent
+from game_logic.base import Item, ChoiceType, GameEvent
 from game_logic.game import Game
 from game_logic.player import Player
 
@@ -14,21 +14,23 @@ class ParticularlyRustyCoin(Item):
             is_cursed   = False,
         )
 
-    def apply(self, game: Game, player: Player) -> None:
-        # Playing an item EQUIPS it to a hero. Re-entrant like every other effect:
-        # 1st call asks which hero, 2nd call (target_hero filled) attaches it.
-        if game.target_hero is None:
-            game.pending_choice = ChoiceType.CHOOSE_HERO_FROM_ANY_PARTY
-            game.phase = Phase.AWAITING_CHOICE
-            return
-        # Move the item out of the hand and onto the chosen hero.
+    def apply(self, game: Game, player: Player):
+        # Playing an item EQUIPS it to a hero (generator ability, like heroes).
+        # Re-prompt if the chosen hero already holds an item — add_item would
+        # silently destroy the old one otherwise.
+        game.message = f"Choose a hero to equip {self.name} to"
+        while True:
+            target = yield ChoiceType.CHOOSE_HERO_FROM_ANY_PARTY
+            if target.item is None:
+                break
+            game.message = f"{target.name} already holds an item — choose another hero"
         if self in player.hand:
             player.hand.remove(self)
-        game.target_hero.add_item(self)
-        game.target_hero = None
-        game.pending_choice = None   # signal "done" so the resume logic finalizes
+        target.add_item(self)
+        game.log_event(f"{player.name} equipped {self.name} to {target.name}")
+        game.message = None
 
     def on_event(self, event: GameEvent, game: Game, player: Player) -> None:
-        # Fired by Hero.apply when the hero this coin is equipped to fails its roll.
+        # Fired by Hero.finish_roll when the hero this coin is equipped to fails its roll.
         if event is GameEvent.UNSUCCESSFUL_HERO_ROLL and game.deck:
             player.draw(game.deck)

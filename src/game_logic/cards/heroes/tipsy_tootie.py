@@ -15,15 +15,20 @@ class TipsyTootie(Hero):
         )
 
     def use_ability(self, game: Game, player: Player):
-        if not any(
-            any(isinstance(c, Hero) for c in p.party)
-            for p in game.players if p is not player
-        ):
-            return  # This checks if theres any heroes to steal so the game doesnt softlock
+        # Only unprotected opponents with heroes are valid — if none, fizzle so
+        # the game doesn't softlock on an unanswerable prompt.
+        if not game.has_stealable_opponent_heroes(player):
+            return
+        # The UI greys out protected parties for CHOOSE_HERO_TO_STEAL, but a
+        # stale/naughty client could still submit one — re-prompt until valid.
         game.message = "Choose a hero to steal from an opponent's party"
-        target_player, target_hero = yield ChoiceType.CHOOSE_HERO_FROM_OPPONENT_PARTY
-        target_player.remove_from_party(target_hero)
+        while True:
+            target_player, target_hero = yield ChoiceType.CHOOSE_HERO_TO_STEAL
+            if not target_player.steal_protected:
+                break
+            game.message = f"{target_player.name}'s party is protected — choose another hero"
+        game.steal_hero(player, target_player, target_hero)
         player.remove_from_party(self)
-        player.add_to_party(target_hero)
         target_player.add_to_party(self)
+        game.log_event(f"{self.name} moved to {target_player.name}'s party")
         game.message = None

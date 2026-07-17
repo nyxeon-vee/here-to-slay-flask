@@ -6,25 +6,38 @@ action). Public methods are the "moves" the Flask/SocketIO layer calls; they
 validate against `phase` and the current player, mutate state, and raise on
 illegal input. The engine has no knowledge of the network or the UI.
 
-Because some card effects need player input mid-resolution, an effect can pause
-by setting `phase = AWAITING_CHOICE` and returning; the outer layer fills in the
-answer and re-calls the effect. The `target_*` / `choice` / `collected_cards`
-fields below are the scratchpad that carries state across those re-entries.
+Card abilities that need player input mid-effect are GENERATORS: they
+`yield ChoiceType.X` to pause, the engine collects the answer and resumes them
+with gen.send(answer). See Hero.use_ability in base.py for the authoring guide
+and choices.py for the driving machinery.
+
+The class is split by concern into mixins — one rule keeps that sane:
+ALL state is declared here in Game.__init__; mixins only define methods.
+
+    challenge.py — ChallengeMixin: the three-step challenge flow
+    rolls.py     — RollMixin:      dice, modifiers, roll resolution
+    choices.py   — ChoiceMixin:    generator driving (yield/send/answers)
+    effects.py   — EffectsMixin:   destroy/sacrifice/steal verbs + event log
 """
 from typing import List
+from types import GeneratorType
+import random
+
 from game_logic.player import Player
 from game_logic.exceptions import (
     CardNotInPartyError,
     InvalidPhaseError,
     PlayerNotEnoughActionPointsError,
     CardNotInHandError,
-    PartyNotFulfillRequiermentError,
 )
-from game_logic.base import Card, Leader, Hero, Magic, Monster, RollOutcome, Modifier, Challenge, ChoiceType, GameEvent, Phase
-import random
+from game_logic.base import Card, Leader, Hero, Magic, Monster, ChoiceType, GameEvent, Phase
+from game_logic.challenge import ChallengeMixin
+from game_logic.rolls import RollMixin
+from game_logic.choices import ChoiceMixin
+from game_logic.effects import EffectsMixin
 
 
-class Game():
+class Game(ChallengeMixin, RollMixin, ChoiceMixin, EffectsMixin):
     def __init__(self) -> None:
         # ── Table state: the cards and players in the match ──────────────────
         self.players: List[Player] = []
@@ -44,9 +57,9 @@ class Game():
         self.pending_player: Player | None = None
         self.challenge_context: dict | None = None  # set while a challenge is rolling
 
-        # ── Choice scratchpad: filled by the UI, read by a paused effect ─────
+        # ── Choice scratchpad: filled by the UI, read by _get_choice_answer ──
         #    while phase == AWAITING_CHOICE. pending_choice says which prompt is
-        #    open; the rest hold the answer (see ChoiceType in base.py).
+        #    open; the rest hold the raw answer (see ChoiceType in base.py).
         self.pending_choice: ChoiceType | None = None
         self.pending_choice_player: Player | None = None  # WHO must answer (often not current_player)
         self.target_card: Card | None = None
@@ -57,11 +70,10 @@ class Game():
         self.collected_cards: list[Card] = []             # temporary pool to pick from
 
         # ── Re-entry bookmark ────────────────────────────────────────────────
-        #    When an effect pauses (phase == AWAITING_CHOICE) this records WHAT
-        #    to resume once the answer arrives.
-        #    Generator abilities (heroes, monsters): (kind, generator)   — 2-tuple
-        #    Magic apply (old re-entrant style):      (kind, card, player) — 3-tuple
-        self.paused: tuple | None = None
+        #    When an effect pauses (phase == AWAITING_CHOICE) this records the
+        #    suspended generator to resume once the answer arrives, plus the
+        #    card/player for the UI: {"kind", "gen", "card", "player"}.
+        self.paused: dict | None = None
 
         # ── Roll context: set when ROLL_PENDING, cleared when roll resolves ──
         #    Carries enough info to finish the roll after the modifier window.
@@ -70,86 +82,23 @@ class Game():
         self.last_roll_initial: int = 0               # dice total BEFORE modifiers
         self.last_roll_current: int = 0               # live total AFTER modifiers
         self.message: str | None = None               # message for the choice
-        
+
+        # ── Event log: public play-by-play shown in the UI "chat" panel ──────
+        self.event_log: list[dict] = []               # [{"text": ..., "kind": ...}]
+
+    # ── Small shared helpers ────────────────────────────────────────────────
+
     def _spend_ap(self, player: Player, amount: int) -> None:
         # Charge action points for a move, refusing if the player can't afford it.
         if player.action_points < amount:
             raise PlayerNotEnoughActionPointsError
         player.action_points -= amount
 
-    # ── Generator-based ability helpers ────────────────────────────────────
-
-    def _get_choice_answer(self):
-        """Extract the typed answer from the scratchpad based on pending_choice.
-
-        For most types the answer is a single object.  For
-        CHOOSE_HERO_FROM_OPPONENT_PARTY the UI sets BOTH target_player and
-        target_hero, so we return them as a tuple that the generator can
-        unpack with  `target_player, target_hero = yield ...`.
-        """
-        ct = self.pending_choice
-        if ct == ChoiceType.CHOOSE_YES_NO:
-            return self.choice == 0           # True = Yes, False = No
-        if ct == ChoiceType.CHOOSE_TARGET_PLAYER:
-            return self.target_player
-        if ct == ChoiceType.CHOOSE_HERO_FROM_OPPONENT_PARTY:
-            return (self.target_player, self.target_hero)
-        if ct in (ChoiceType.CHOOSE_HERO_FROM_OWN_PARTY, ChoiceType.CHOOSE_HERO_FROM_ANY_PARTY):
-            return self.target_hero
-        if ct in (ChoiceType.CHOOSE_CARD_FROM_OWN_HAND, ChoiceType.CHOOSE_CARD_FROM_POOL):
-            return self.target_card
-        if ct == ChoiceType.CHOOSE_NUMBER:
-            return self.choice
-        return None
-
-    def _start_generator(self, kind: str, gen) -> bool:
-        """Drive a newly-created generator to its first yield.
-
-        Returns True if the generator paused (needs player input) — the caller
-        should return immediately to let the UI collect the answer.
-        Returns False if the generator finished without pausing — the caller
-        should continue with finalization.
-        """
-        try:
-            choice_type = next(gen)
-            self.pending_choice = choice_type
-            self.phase = Phase.AWAITING_CHOICE
-            self.paused = (kind, gen)
-            return True
-        except StopIteration:
-            return False
-
-    def _finalize_kind(self, kind: str) -> None:
-        """Transition to the right phase after a generator finishes.
-
-        If an inner hero triggered a new ROLL_PENDING (e.g. Fuzzy Cheeks
-        played another hero via _execute_card), we leave the phase alone —
-        finish_pending_roll will call _on_card_resolved when that rolls resolves.
-        """
-        if self.pending_roll_context:
-            return  # inner hero roll is in progress; it will finalize later
-        if kind in ("hero_play", "magic_play"):
-            self._on_card_resolved()
-        else:
-            self.phase = Phase.ACTION
-
-    # ───────────────────────────────────────────────────────────────────────
-
-    def _execute_card(self, player: Player, card: Card) -> None:
+    def _execute_card(self, player: Player, card: Card):
         # Thin indirection over card.apply so callers read clearly and we have
-        # one spot to hook logging/effects later.
-        card.apply(self, player)
-
-    def _get_rolling_player(self) -> Player | None:
-        """Whose roll is a modifier currently allowed to change?
-
-        Normally the active player. But during a challenge BOTH sides roll, so
-        the modifier window targets whoever is mid-roll (challenge_context's
-        "current_roller"), which may be an opponent — not current_player.
-        """
-        if self.challenge_context:
-            return self.challenge_context.get("current_roller")
-        return self.current_player
+        # one spot to hook logging/effects later. Returns apply's result — a
+        # generator for generator-style Magic cards, None otherwise.
+        return card.apply(self, player)
 
     def _advance_to_next_player(self) -> None:
         # Rotate to the next seat (wrapping around) and start their turn.
@@ -160,71 +109,10 @@ class Game():
         self.current_player = self.players[next_index]
         self.start_turn(self.current_player)
 
-    # A challenge is two rolls with a modifier window after EACH, so it can't be
-    # one function — we'd have nowhere to pause for modifiers. It's split into
-    # three steps; the outer layer calls them in order, letting players play
-    # modifiers in between. challenge_context carries the two rollers across them.
-    #
-    #   start_challenge       -> challenger rolls,  [modifier window]
-    #   close_challenge_roll_1 -> challenged rolls, [modifier window]
-    #   close_challenge_roll_2 -> compare & resolve
+    # ── Setup ───────────────────────────────────────────────────────────────
 
-    def start_challenge(self, challenger: Player) -> None:
-        """Step 1: challenger rolls, then open their modifier window."""
-        self.challenge_context = {
-            "challenger": challenger,
-            "challenged": self.pending_player,   # the player whose card is being challenged
-            "challenger_roll": None,
-        }
-        self.challenge_context["current_roller"] = challenger  # steers _get_rolling_player
-        self.roll_dice(challenger)
-        if challenger.party_leader:
-            challenger.party_leader.on_event(GameEvent.CHALLENGE_ROLL, self, challenger)
-        self.phase = Phase.ROLL_PENDING  # modifier window for challenger's roll
-
-    def close_challenge_roll_1(self) -> None:
-        """Step 2: challenged player rolls, then open their modifier window."""
-        if self.challenge_context is None:
-            raise InvalidPhaseError("No challenge in progress")
-        ctx = self.challenge_context
-        # Lock in the challenger's final roll before moving to the challenged player.
-        ctx["challenger_roll"] = ctx["challenger"].current_roll
-        challenged = ctx["challenged"]
-        ctx["current_roller"] = challenged  # modifiers now target the challenged player
-        self.roll_dice(challenged)
-        if challenged.party_leader:
-            challenged.party_leader.on_event(GameEvent.CHALLENGE_ROLL, self, challenged)
-        self.phase = Phase.ROLL_PENDING  # modifier window for challenged's roll
-
-    def close_challenge_roll_2(self) -> None:
-        """Step 3: compare the two rolls and resolve the challenge."""
-        if self.challenge_context is None:
-            raise InvalidPhaseError("No challenge in progress")
-        ctx = self.challenge_context
-        challenger: Player = ctx["challenger"]
-        challenged: Player = ctx["challenged"]
-        self.challenge_context = None
-
-        self.last_roll_player_id = None
-        self.last_roll_initial = 0
-        self.last_roll_current = 0
-        if challenger.current_roll >= challenged.current_roll:  # tie goes to challenger
-            # Challenge succeeds: the card is cancelled. It was committed to the
-            # table but never resolved, so it's still in the player's hand — pull
-            # it out and discard it, then dock the player an action point.
-            assert self.pending_card is not None  # invariant: set while a challenge runs
-            if self.pending_card in challenged.hand:
-                challenged.hand.remove(self.pending_card)
-            self.discard_pile.append(self.pending_card)
-            self.pending_card = None
-            challenged.action_points = max(0, challenged.action_points - 1)
-            self.phase = Phase.ACTION
-        else:
-            # Challenge fails: the card resolves as if never challenged. We came
-            # in via ROLL_PENDING, so re-enter the challenge window first —
-            # resolve_pending_card insists on it.
-            self.phase = Phase.CHALLENGE_WINDOW
-            self.resolve_pending_card()
+    def add_player(self, player: Player) -> None:
+        self.players.append(player)
 
     def start_game(self) -> None:
         # Deal the opening table: a leader + 5 cards per player, 3 monsters in
@@ -246,19 +134,11 @@ class Game():
         for _ in range(3):
             self.refill_monster_row()
 
+        self.log_event("Game started", "turn")
         self.current_player = self.players[0]
         self.start_turn(self.current_player)
 
-    def add_player(self, player: Player) -> None:
-        self.players.append(player)
-
-    def roll_dice(self, player: Player) -> None:
-        # Two six-sided dice. Result lives on the player (player.current_roll) so
-        # that two rolls can coexist during a challenge — see _get_rolling_player.
-        player.current_roll = random.randint(1, 6) + random.randint(1, 6)
-        self.last_roll_player_id = player.player_id
-        self.last_roll_initial = player.current_roll
-        self.last_roll_current = player.current_roll
+    # ── Playing a card ──────────────────────────────────────────────────────
 
     def play_card(self, player: Player, card: Card) -> None:
         # Commit the card to the table and OPEN the challenge window. The card is
@@ -277,6 +157,7 @@ class Game():
         self.phase = Phase.CHALLENGE_WINDOW
         self.pending_card = card
         self.pending_player = player
+        self.log_event(f"{player.name} played {card.name}")
 
     def resolve_pending_card(self) -> None:
         # Run the pending card's effect. Also called by close_challenge_roll_2
@@ -284,15 +165,15 @@ class Game():
         if self.phase != Phase.CHALLENGE_WINDOW:
             raise InvalidPhaseError("")
         assert self.pending_card is not None and self.pending_player is not None  # set by play_card
-        self._execute_card(self.pending_player, self.pending_card)
-        # If the effect needs player input it pauses by leaving the phase at
-        # AWAITING_CHOICE. Don't tidy up — record HOW to resume it (a Hero is
-        # resumed via use_ability, a Magic via apply) and bail; submit_choice
-        # finishes the job later. Otherwise it completed synchronously: clean up.
-        if self.phase == Phase.AWAITING_CHOICE:
-            kind = "hero_play" if isinstance(self.pending_card, Hero) else "magic_play"
-            self.paused = (kind, self.pending_card, self.pending_player)
-            return
+        card, player = self.pending_card, self.pending_player
+        result = self._execute_card(player, card)
+        # A generator-style apply (Magic cards that need input) returns its
+        # generator un-executed — drive it; if it pauses, submit_choice will
+        # finish the job later. Hero.apply instead runs synchronously and parks
+        # the game in ROLL_PENDING (returns None).
+        if isinstance(result, GeneratorType):
+            if self._start_generator("magic_play", result, card, player):
+                return
         if self.phase == Phase.ROLL_PENDING:
             # Hero.roll_and_activate parked us here; pending_roll_context already
             # set. _on_card_resolved will be called by finish_pending_roll() once
@@ -320,159 +201,10 @@ class Game():
         self.choice = None
         self.phase = Phase.ACTION
 
-    def submit_choice(self) -> None:
-        """Resume a paused effect after the UI has filled in the scratchpad.
-
-        Two paths depending on what self.paused holds:
-
-          (kind, generator)       — hero / monster generator ability.
-            Extract the typed answer, clear the scratchpad so the generator
-            gets a clean slate, then send the answer via gen.send().
-            If the generator yields again it needs more input; if it raises
-            StopIteration it's done and we finalize the turn.
-
-          (kind, card, player)    — magic apply (old re-entrant style).
-            Re-call card.apply() and check pending_choice to see if it paused
-            again (same as before).
-        """
-        if self.phase != Phase.AWAITING_CHOICE or self.paused is None:
-            raise InvalidPhaseError("No choice is pending")
-
-        kind = self.paused[0]
-
-        if len(self.paused) == 2:
-            # ── Generator path (heroes, monsters) ──────────────────────────
-            _, gen = self.paused
-            answer = self._get_choice_answer()
-            # Clear the choice scratchpad — generators use local variables and
-            # must not see stale values from a previous yield.
-            self.pending_choice = None
-            self.target_card = None
-            self.target_player = None
-            self.target_hero = None
-            self.choice = None
-            self.message = None
-            try:
-                choice_type = gen.send(answer)
-                # Generator paused again — record what kind of answer it wants.
-                self.pending_choice = choice_type
-                self.phase = Phase.AWAITING_CHOICE
-                # self.paused stays (kind, gen) — same generator continues
-            except StopIteration:
-                self.paused = None
-                self._finalize_kind(kind)
-        else:
-            # ── Old re-entrant path (magic apply) ──────────────────────────
-            _, card, player = self.paused
-            card.apply(self, player)
-            if self.pending_choice is not None:
-                return  # paused again; keep self.paused
-            self.paused = None
-            self._on_card_resolved()
-
-    def play_modifier(self, player: Player, card: Modifier, choice: int = 0) -> None:
-        # Modifiers adjust a roll that just happened (the ROLL_PENDING window).
-        # `choice` picks between a +/- option on two-sided modifier cards.
-        if self.phase != Phase.ROLL_PENDING:
-            raise InvalidPhaseError("Modifiers can only be played during a roll!")
-        if card.has_choice and choice not in (0, 1):
-            raise ValueError("Must choose option 0 or 1 for this modifier")
-        if card not in player.hand:
-            raise CardNotInHandError(f"{card!r} is not in {player.name}'s hand")
-        rolling_player = self._get_rolling_player()  # may be an opponent, mid-challenge
-        if rolling_player:
-            rolling_player.current_roll += card.options[choice]
-            self.last_roll_current = rolling_player.current_roll  # keep overlay in sync
-        self.discard_pile.append(card)
-        player.hand.remove(card)
-        # Abyss Queen passive: when SOMEONE ELSE modifies your roll, +1. Skip when
-        # you modify your own roll, hence the rolling_player != player guard.
-        if rolling_player and rolling_player != player:
-            for party_card in rolling_player.party:
-                party_card.on_event(GameEvent.MODIFIER_PLAYED, self, rolling_player)
-
-    def play_challenge(self, player: Player, card: Challenge) -> None:
-        # An opponent spends a Challenge card to contest the pending card; this
-        # kicks off the two-roll challenge sequence (start_challenge = step 1).
-        if self.phase != Phase.CHALLENGE_WINDOW:
-            raise InvalidPhaseError("Can only challenge during the challenge window!")
-        if player == self.current_player:
-            raise InvalidPhaseError("You cannot challenge your own action!")
-        if card not in player.hand:
-            raise CardNotInHandError(f"{card!r} is not in {player.name}'s hand")
-        player.hand.remove(card)
-        self.discard_pile.append(card)
-        self.start_challenge(challenger=player)
-
-    def attack_monster(self, player: Player, monster: Monster) -> None:
-        # Costs 2 AP and a roll. Three outcomes (see Monster.evaluate_roll):
-        #   WIN  -> monster joins your party, row refills
-        #   LOSE -> monster's failure penalty fires (usually sacrifice a hero)
-        #   DRAW -> nothing happens, monster stays in the row
-        if not monster.party_requirement.check(player.party, player.party_leader):
-            raise PartyNotFulfillRequiermentError("Your party does not meet this monster's requirements!")
-        if self.phase != Phase.ACTION:
-            raise InvalidPhaseError("Can only attack a monster during action phase!")
-        if player != self.current_player:
-            raise InvalidPhaseError("It is not your turn!")
-        if monster not in self.monster_row:
-            raise InvalidPhaseError("That monster is not in the monster row!")
-
-        self._spend_ap(player, 2)
-        self.phase = Phase.ROLL_PENDING
-        self.roll_dice(player)
-        # Leader passive: The Divine Arrow adds +1 when attacking a monster.
-        if player.party_leader:
-            player.party_leader.on_event(GameEvent.MONSTER_ATTACK, self, player)
-        self.pending_roll_context = {"type": "monster_attack", "monster": monster, "player": player}
-        # Phase stays ROLL_PENDING — game_socket opens the modifier window.
-        # Resolution happens in finish_pending_roll() when the window closes.
-
-    def finish_pending_roll(self) -> None:
-        """Resolve a hero or monster roll after the modifier window has closed.
-
-        Called by game_socket._advance_window when ROLL_PENDING expires with no
-        challenge_context. Reads pending_roll_context, runs the appropriate
-        resolution, then returns to ACTION (or AWAITING_CHOICE if the effect
-        needs more player input).
-        """
-        ctx = self.pending_roll_context
-        if ctx is None:
-            raise InvalidPhaseError("No roll in progress")
-        self.pending_roll_context = None
-        self.last_roll_player_id = None
-        self.last_roll_initial = 0
-        self.last_roll_current = 0
-
-        t = ctx["type"]
-        if t in ("hero_play", "hero_party"):
-            hero: Hero = ctx["hero"]
-            player: Player = ctx["player"]
-            kind = "hero_play" if t == "hero_play" else "party_ability"
-            # finish_roll returns the generator from use_ability (on a WIN), or
-            # None (on a LOSE — ability doesn't run, item passive fires instead).
-            gen = hero.finish_roll(self, player)
-            if gen is not None and self._start_generator(kind, gen):
-                return  # generator paused for player input
-            self._finalize_kind(kind)
-
-        elif t == "monster_attack":
-            monster: Monster = ctx["monster"]
-            player: Player = ctx["player"]
-            outcome: RollOutcome = monster.evaluate_roll(player.current_roll)
-            if outcome == RollOutcome.WIN:
-                self.monster_row.remove(monster)
-                player.add_to_party(monster)
-                self.refill_monster_row()
-            elif outcome == RollOutcome.LOSE:
-                gen = monster.apply_failure(self, player)
-                if self._start_generator("monster_failure", gen):
-                    return  # generator paused for player input
-            self.phase = Phase.ACTION
-
     def use_party_ability(self, player: Player, card: Hero) -> None:
-        # Activate the ability of a hero already in your party (no new roll —
-        # unlike playing a hero from hand). Re-entrant, same as Hero.use_ability.
+        # Activate the ability of a hero already in your party (no card played —
+        # unlike playing a hero from hand there's no challenge window, but the
+        # roll still opens a modifier window).
         if self.phase != Phase.ACTION:
             raise InvalidPhaseError("Can only use party ability during action phase!")
         if player != self.current_player:
@@ -482,10 +214,50 @@ class Game():
         if card.was_used_this_turn:
             raise InvalidPhaseError(f"{card.name}'s ability has already been used this turn!")
         self._spend_ap(player, card.action_cost)
+        self.log_event(f"{player.name} uses {card.name}'s ability")
         card.roll_and_activate(self, player, context_type="hero_party")
         # Phase is now ROLL_PENDING; game_socket opens the modifier window.
-        # finish_pending_roll() is called when the window closes and handles
-        # the ability + any AWAITING_CHOICE pause bookmark.
+        # finish_pending_roll() runs the ability generator when it closes.
+
+    # ── Turn actions ────────────────────────────────────────────────────────
+
+    def start_turn(self, player: Player) -> None:
+        # Reset for the new active player. Each turn grants a fresh 3 AP and
+        # every hero in their party gets their ability back.
+        self.phase = Phase.ACTION
+        player.action_points = 3
+        player.steal_protected = False # Calming Voice lasts "until your next turn"
+        player.challenge_protected = False # Same for iron resolve
+        player.destroy_protected = False # Same for mighty blade
+        player.roll_bonus = 0            # safety net; normally cleared in end_turn
+        self.log_event(f"— {player.name}'s turn —", "turn")
+        self.last_roll_player_id = None
+        self.last_roll_initial = 0
+        self.last_roll_current = 0
+        for card in player.party:
+            if isinstance(card, Hero):
+                card.reset_turn()
+
+    def end_turn(self, player: Player) -> None:
+        if self.phase != Phase.ACTION:
+            raise InvalidPhaseError("Can only end turn during the action phase")
+        if player != self.current_player:
+            raise InvalidPhaseError("It is not your turn!")
+        # Vibrant Glow lasts "until the END of your turn" — expire it here, not
+        # at your next start_turn, or it would boost your challenge rolls made
+        # during other players' turns.
+        player.roll_bonus = 0
+        self.phase = Phase.END_TURN
+        self._advance_to_next_player()
+
+    def draw_card(self, player: Player) -> None:
+        if self.phase != Phase.ACTION:
+            raise InvalidPhaseError("Can only draw card during the action phase")
+        if player != self.current_player:
+            raise InvalidPhaseError("It is not your turn!")
+        self._spend_ap(player, 1)
+        player.draw(self.deck)
+        self.log_event(f"{player.name} drew a card")
 
     def discard_all_cards(self, player: Player) -> None:
         # The "mulligan" move: pay 3 AP to dump your whole hand and draw 5 fresh.
@@ -497,34 +269,9 @@ class Game():
         self.discard_pile.extend(player.discard_hand())
         for _ in range(5):
             player.draw(self.deck)
+        self.log_event(f"{player.name} discarded their hand and drew 5 new cards")
 
-    def end_turn(self, player: Player) -> None:
-        if self.phase != Phase.ACTION:
-            raise InvalidPhaseError("Can only end turn during the action phase")
-        if player != self.current_player:
-            raise InvalidPhaseError("It is not your turn!")
-        self.phase = Phase.END_TURN
-        self._advance_to_next_player()
-
-    def start_turn(self, player: Player) -> None:
-        # Reset for the new active player. Each turn grants a fresh 3 AP and
-        # every hero in their party gets their ability back.
-        self.phase = Phase.ACTION
-        player.action_points = 3
-        self.last_roll_player_id = None
-        self.last_roll_initial = 0
-        self.last_roll_current = 0
-        for card in player.party:
-            if isinstance(card, Hero):
-                card.reset_turn()
-
-    def draw_card(self, player: Player) -> None:
-        if self.phase != Phase.ACTION:
-            raise InvalidPhaseError("Can only draw card during the action phase")
-        if player != self.current_player:
-            raise InvalidPhaseError("It is not your turn!")
-        self._spend_ap(player, 1)
-        player.draw(self.deck)
+    # ── Board upkeep ────────────────────────────────────────────────────────
 
     def refill_monster_row(self) -> None:
         # Keep the monster row stocked from the monster deck (called at setup and

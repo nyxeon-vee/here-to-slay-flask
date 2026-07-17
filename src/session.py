@@ -88,6 +88,11 @@ def find_card(game: Game, uid: str) -> Card | None:
         for card in pool:
             if card.uid == uid:
                 return card
+            # Equipped items live ON their hero (hero.item), not in any pool —
+            # without this, cursed-item prompts could never resolve their target.
+            item = getattr(card, "item", None)
+            if item is not None and item.uid == uid:
+                return item
     return None
 
 

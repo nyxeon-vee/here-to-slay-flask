@@ -22,7 +22,15 @@ class Player:
         # Result of this player's most recent roll. Stored per-player (not on the
         # Game) so a challenge's two simultaneous rolls don't clobber each other.
         self.current_roll: int = 0
-
+        # Calming Voice: party heroes can't be STOLEN (destroy still works).
+        # Set by the card, cleared at the start of this player's next turn.
+        self.steal_protected: bool = False
+        self.challenge_protected: bool = False
+        # Vibrant Glow: flat bonus added to every roll this player makes.
+        # Additive so multiple effects stack; cleared when their turn ends.
+        self.roll_bonus: int = 0
+        self.destroy_protected: bool = False
+        
     def draw(self, deck: list[Card]) -> None:
         self.hand.append(deck.pop())
 

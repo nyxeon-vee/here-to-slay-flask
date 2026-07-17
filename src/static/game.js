@@ -86,6 +86,22 @@ function render() {
   renderOpponents();
   renderMonsterRow();
   renderMe();
+  renderLog();
+}
+
+// ── Event log panel — auto-scrolls to the newest entry ─────────────────────
+function renderLog() {
+  const box = $("game-log-entries");
+  const stuckToBottom =                       // don't yank the scroll if the
+    box.scrollHeight - box.scrollTop - box.clientHeight < 20; // user scrolled up
+  box.innerHTML = "";
+  (STATE.log || []).forEach(e => {
+    const d = document.createElement("div");
+    d.className = "log-entry " + (e.kind || "info");
+    d.textContent = e.text;
+    box.appendChild(d);
+  });
+  if (stuckToBottom) box.scrollTop = box.scrollHeight;
 }
 
 function renderLobby() {
@@ -441,8 +457,11 @@ function renderOpponents() {
 
     const head = document.createElement("div");
     head.className = "opp-head";
+    const badges =
+      (p.steal_protected   ? `<span class="protected-badge" title="Party cannot be stolen from">🛡 No steal</span> ` : "") +
+      (p.destroy_protected ? `<span class="protected-badge" title="Heroes cannot be destroyed">🛡 No destroy</span> ` : "");
     head.innerHTML = `<span class="opp-name">${escapeHtml(p.name)}</span>` +
-      `<span class="roll">AP ${p.action_points} · roll ${p.current_roll}</span>`;
+      `<span class="roll">${badges}AP ${p.action_points} · roll ${p.current_roll}</span>`;
     el.appendChild(head);
 
     el.appendChild(subhead("Leader"));
@@ -480,12 +499,49 @@ function stackWithItem(card, heroEl) {
   return stack;
 }
 
+
+
+// A hero in MY party whose equipped item is CURSED — the item card (peeking
+// below the hero) becomes the clickable target. Heroes with no item, or with
+// a non-cursed item, render normally. Answers CHOOSE_CURSED_ITEM_FROM_OWN_PARTY,
+// whose yield returns (hero, item) — so we send both uids.
+function cursedItemSelectable(card) {
+  const heroEl = cardEl(card);
+  if (!card.item || !card.item.is_cursed) {
+    return stackWithItem(card, heroEl);   // not a valid target — plain render
+  }
+  const stack = document.createElement("div");
+  stack.className = "party-hero-stack";
+  stack.appendChild(heroEl);
+  const itemEl = cardEl(card.item, { selectable: true,
+    onClick: () => send("submit_choice", { target_hero_uid: card.uid, target_card_uid: card.item.uid }) });
+  itemEl.classList.add("party-item-card");
+  stack.appendChild(itemEl);
+  return stack;
+}
+
+
 // A party card on an OPPONENT becomes selectable when a choice targets an
 // opponent's / any party's hero.
 function heroSelectable(card, owner) {
   const choice = myChoice();
   const isHero = card.card_type === "hero";
   if (isHero && choice === "CHOOSE_HERO_FROM_OPPONENT_PARTY") {
+    return stackWithItem(card, cardEl(card, { selectable: true,
+      onClick: () => send("submit_choice", { target_player_id: owner.player_id, target_hero_uid: card.uid }) }));
+  }
+  // Stealing respects Calming Voice, destroying respects Mighty Blade —
+  // protected parties render greyed-out instead of selectable.
+  const protectedChoices = {
+    CHOOSE_HERO_TO_STEAL:   "steal_protected",
+    CHOOSE_HERO_TO_DESTROY: "destroy_protected",
+  };
+  if (isHero && protectedChoices[choice]) {
+    if (owner[protectedChoices[choice]]) {
+      const el = cardEl(card);
+      el.style.opacity = "0.45";
+      return stackWithItem(card, el);
+    }
     return stackWithItem(card, cardEl(card, { selectable: true,
       onClick: () => send("submit_choice", { target_player_id: owner.player_id, target_hero_uid: card.uid }) }));
   }
@@ -541,6 +597,9 @@ function renderMe() {
 function myPartyCard(card) {
   const choice = myChoice();
   const isHero = card.card_type === "hero";
+  if (isHero && choice === "CHOOSE_CURSED_ITEM_FROM_OWN_PARTY") {
+    return cursedItemSelectable(card);
+  }
   if (isHero && (choice === "CHOOSE_HERO_FROM_OWN_PARTY" || choice === "CHOOSE_HERO_FROM_ANY_PARTY")) {
     return stackWithItem(card, cardEl(card, { selectable: true,
       onClick: () => send("submit_choice", { target_hero_uid: card.uid }) }));
@@ -637,7 +696,10 @@ function promptText(choice) {
     CHOOSE_HERO_FROM_OWN_PARTY:      "Choose a hero from YOUR party.",
     CHOOSE_HERO_FROM_ANY_PARTY:      "Choose a hero from ANY party.",
     CHOOSE_HERO_FROM_OPPONENT_PARTY: "Choose a hero from an OPPONENT's party.",
+    CHOOSE_HERO_TO_STEAL:            "Choose a hero to STEAL (protected parties are greyed out).",
+    CHOOSE_HERO_TO_DESTROY:          "Choose a hero to DESTROY (protected parties are greyed out).",
     CHOOSE_CARD_FROM_OWN_HAND:       "Choose a card from your hand.",
+    CHOOSE_CURSED_ITEM_FROM_OWN_PARTY: "Choose a CURSED item in your party.",
     CHOOSE_CARD_FROM_POOL:           "Choose a card from the pool.",
     CHOOSE_YES_NO:                   "Yes or no?",
     CHOOSE_NUMBER:                   "Pick a number.",

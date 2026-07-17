@@ -433,6 +433,51 @@ button:disabled { background: #2c4636; color: #6f8a78; cursor: not-allowed; }
   padding: 4px 2px;
 }
 
+/* ── Event log ("chat") panel — fixed bottom-left ────────────────────────── */
+#game-log {
+  position: fixed;
+  left: 814px;
+  bottom: 14px;
+  width: 280px;
+  max-height: 30vh;
+  background: #12291bee;
+  border: 1px solid #2f5d40;
+  border-radius: 10px;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#game-log-header {
+  padding: 6px 12px;
+  font-size: .7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: #8fbf9c;
+  border-bottom: 1px solid #2f5d40;
+}
+#game-log-entries {
+  overflow-y: auto;
+  padding: 6px 12px 8px;
+  font-size: .78rem;
+  line-height: 1.35;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.log-entry        { color: #c7e0cf; }
+.log-entry.combat { color: #f2a09a; }
+.log-entry.good   { color: #f2c14e; }
+.log-entry.turn   { color: #8fbf9c; font-weight: 600; text-align: center; }
+
+/* Calming Voice badge on a protected opponent */
+.protected-badge {
+  color: #7ec8f2;
+  font-weight: 600;
+  font-size: .75rem;
+}
+
 /* ── Error toast ─────────────────────────────────────────────────────────── */
 #error-toast {
   position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
