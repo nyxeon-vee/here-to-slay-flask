@@ -17,6 +17,7 @@ class Bullseye(Hero):
     def use_ability(self, game: Game, player: Player):
         # pool IS collected_cards (same list), so removing from it updates the
         # UI's pool between the two prompts for free.
+        game._refill_deck_if_empty()  # recycle the discard first if needed
         pool = [game.deck.pop() for _ in range(min(3, len(game.deck)))]
         if not pool:
             game.log_event("The deck is empty — no cards to look at!")

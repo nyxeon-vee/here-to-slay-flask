@@ -25,5 +25,5 @@ class ArcticAries(Monster):
         game.message = None
 
     def on_event(self, event: GameEvent, game: Game, player: Player) -> None:
-        if event == GameEvent.SUCCESSFUL_HERO_ROLL and game.deck:
-            player.draw(game.deck)
+        if event == GameEvent.SUCCESSFUL_HERO_ROLL:
+            game.draw_cards(player)

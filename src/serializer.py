@@ -24,15 +24,17 @@ def _action_context(game: Game) -> dict | None:
     """
     phase = game.phase
 
-    # Card on the table waiting for a challenge or still in the challenge window.
-    if phase == Phase.CHALLENGE_WINDOW and game.pending_card and game.pending_player:
+    # Card played OR monster attack waiting out the challenge window.
+    contested = game.pending_card or game.pending_attack
+    if phase == Phase.CHALLENGE_WINDOW and contested and game.pending_player:
         pp = game.pending_player
         return {
             "phase":       "challenge_window",
             "player_name": pp.name,
             "player_id":   pp.player_id,
-            "card":        game.pending_card.to_dict(),
-            "label":       f"played {game.pending_card.name}",
+            "card":        contested.to_dict(),
+            "label":       (f"played {contested.name}" if game.pending_card
+                            else f"attacking {contested.name}"),
             # Pre-populate dice columns at zero — fills in once a challenge starts.
             "challenger_roll": None,
             "challenged_roll": {"player_id": pp.player_id, "name": pp.name, "roll": None},
@@ -70,11 +72,12 @@ def _action_context(game: Game) -> dict | None:
             challenger  = ctx["challenger"]
             challenged  = ctx["challenged"]
             is_step2    = roller is challenged  # both have rolled
+            contested = game.pending_card or game.pending_attack
             return {
                 "phase":       "challenge_roll",
                 "player_name": roller.name if roller else "?",
                 "player_id":   roller.player_id if roller else None,
-                "card":        game.pending_card.to_dict() if game.pending_card else None,
+                "card":        contested.to_dict() if contested else None,
                 "label":       "rolling for challenge",
                 # Both rolls shown side-by-side; challenged_roll is None until step 2.
                 "challenger_roll": {
@@ -142,9 +145,11 @@ def serialize_game(game: Game, viewer: Player) -> dict:
         # One entry per player; the viewer's own hand is the only one revealed.
         "players":           [serialize_player(p, reveal_hand=(p is viewer)) for p in game.players],
 
-        # ── The card "on the table" during CHALLENGE_WINDOW ──────────────────
-        # What was just played and by whom, so opponents can decide to challenge.
-        "pending_card":      game.pending_card.to_dict() if game.pending_card else None,
+        # ── The thing "on the table" during CHALLENGE_WINDOW ─────────────────
+        # What was just played (or which monster is being attacked) and by whom,
+        # so opponents can decide to challenge.
+        "pending_card":      (game.pending_card or game.pending_attack).to_dict()
+                             if (game.pending_card or game.pending_attack) else None,
         "pending_player_id": game.pending_player.player_id if game.pending_player else None,
 
         # ── Roll overlay: initial dice value before any modifiers ────────────
@@ -163,8 +168,12 @@ def serialize_game(game: Game, viewer: Player) -> dict:
         "pending_choice":    game.pending_choice.name if game.pending_choice else None,
         "choice_player_id":  answering,                       # who should answer
         "choice_message":    game.message,                    # optional prompt text set by the card
-        # A temporary pool to choose from (Beary Wise, Call To The Fallen, ...).
-        "collected_cards":   [c.to_dict() for c in game.collected_cards],
+        # A temporary pool to choose from (Beary Wise, Bullseye, ...). Sent ONLY
+        # to the player who must answer — pools can contain hidden information
+        # (Bullseye's peek at the top of the deck), and even for public pools
+        # other clients have no reason to receive the raw cards.
+        "collected_cards":   [c.to_dict() for c in game.collected_cards]
+                             if answering == viewer.player_id else [],
 
         # ── Event log: public play-by-play for the "chat" panel ──────────────
         "log":               game.event_log,

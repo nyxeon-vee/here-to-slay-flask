@@ -15,7 +15,7 @@ class FuzzyCheeks(Hero):
         )
 
     def use_ability(self, game: Game, player: Player):
-        player.draw(game.deck)
+        game.draw_cards(player)
         if not any(isinstance(c, Hero) for c in player.hand):
             return  # drew a card but no heroes to play — fizzle
         game.message = "Choose a hero to play immediately!"

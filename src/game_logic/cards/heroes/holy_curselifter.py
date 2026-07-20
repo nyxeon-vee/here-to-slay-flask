@@ -25,6 +25,8 @@ class HolyCurselifter(Hero):
             return
         game.message = "Choose cursed item to remove from your hero!"
         chosen_hero, chosen_item = yield ChoiceType.CHOOSE_CURSED_ITEM_FROM_OWN_PARTY
+        # remove_item (not `hero.item = None`) so on_unequip fires and the
+        # item's owner back-reference is cleared.
+        chosen_hero.remove_item()
         player.hand.append(chosen_item)
-        chosen_hero.item = None
         game.message = None

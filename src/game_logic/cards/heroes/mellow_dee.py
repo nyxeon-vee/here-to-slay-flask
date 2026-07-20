@@ -15,8 +15,8 @@ class MellowDee(Hero):
         )
 
     def use_ability(self, game: Game, player: Player):
-        if not game.deck:
-            return  # deck empty — fizzle
+        if not game._refill_deck_if_empty():
+            return  # deck AND discard empty — fizzle
         drawn = game.deck.pop()
         if not isinstance(drawn, Hero):
             player.hand.append(drawn)

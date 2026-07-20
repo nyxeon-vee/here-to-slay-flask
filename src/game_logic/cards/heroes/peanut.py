@@ -15,6 +15,6 @@ class Peanut(Hero):
         )
 
     def use_ability(self, game: Game, player: Player):
-        player.draw(game.deck)
-        player.draw(game.deck)
-        return
+        # draw_cards is deck-safe: draws what it can, recycling the discard
+        # pile into a fresh deck if the draw pile runs out mid-way.
+        game.draw_cards(player, 2)

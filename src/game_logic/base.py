@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from game_logic.player import Player
 from abc import ABC, abstractmethod
 from enum import Enum, auto
+from types import GeneratorType
 import uuid
 
 class RollCondition(Enum):
@@ -75,6 +76,10 @@ class GameEvent(Enum):
     MODIFIER_PLAYED         = auto()  # a Modifier was played on someone's roll
     SUCCESSFUL_HERO_ROLL    = auto()  # a Hero roll succeeded (fires on party monsters)
     UNSUCCESSFUL_HERO_ROLL  = auto()  # a Hero roll unsucceeded (fires on item)
+    # Fired at the hero's equipped ITEM just BEFORE the hero would be removed.
+    # A truthy return from on_event intercepts the removal (Decoy Doll).
+    HERO_DESTROYED          = auto()
+    HERO_SACRIFICED         = auto()
 # The single source of truth for "what is the game waiting for right now".
 # Every public Game method guards on this, so illegal actions raise instead of
 # corrupting state. Rough flow: ACTION -> (play card) -> CHALLENGE_WINDOW ->
@@ -139,8 +144,27 @@ class Card(ABC):
         as Hero.use_ability; the engine drives it. Others just run and return None."""
         ...
 
-    def on_event(self, event: "GameEvent", game: "Game", player: "Player") -> None:
-        pass  # default: ignore all events; Monster/Leader/Item override selectively
+    def on_event(self, event: "GameEvent", game: "Game", player: "Player") -> "bool | Generator | None":
+        """React to a game event. ONE hook, three kinds of reaction:
+
+          - return None            -> ordinary sync passive (or: don't care)
+          - return True            -> INTERCEPT, for interceptable events only
+                                      (HERO_DESTROYED / HERO_SACRIFICED — cancels
+                                      the removal; Decoy Doll)
+          - return a generator     -> the reaction needs player input. Supported
+                                      where the caller drives generators (the
+                                      SUCCESSFUL/UNSUCCESSFUL_HERO_ROLL events in
+                                      Hero.finish_roll — Suspiciously Shiny Coin).
+
+        IMPORTANT: never put `yield` directly in on_event — that would turn the
+        whole method into a generator function and EVERY event would return a
+        (truthy!) generator. Instead return a call to a private generator method:
+
+            def on_event(self, event, game, player):
+                if event is GameEvent.SUCCESSFUL_HERO_ROLL:
+                    return self._my_effect(game, player)   # generator method
+        """
+        pass
 
 
     def to_dict(self) -> dict:
@@ -166,7 +190,30 @@ class Hero(Card):
         self.was_used_this_turn: bool = False
 
     def add_item(self, item: Item) -> None:
+        # Wire the back-reference BEFORE the hook — on_equip needs to know
+        # which hero it landed on (Fighter Mask reads/changes its class).
         self.item = item
+        item.owner = self
+        item.on_equip()
+
+    def remove_item(self) -> Item | None:
+        if not self.item:
+            return None
+        item = self.item
+        item.on_unequip()   # must run while owner is still set (restores state)
+        item.owner = None
+        self.item = None
+        return item
+
+    @property
+    def is_sealed(self) -> bool:
+        """True while a blocking item (Sealing Key) is equipped.
+
+        Deliberately DERIVED from the item rather than stored — a stored flag
+        set in on_equip/on_unequip desyncs the moment any code detaches the
+        item without the hooks, and then the hero is sealed forever. This can't.
+        """
+        return self.item is not None and self.item.blocks_ability
 
     def reset_turn(self) -> None:
         """Called at the start of each new turn to allow the ability again."""
@@ -203,21 +250,46 @@ class Hero(Card):
     def finish_roll(self, game: Game, player: Player):
         """Resolve this hero's roll after the modifier window has closed.
 
-        Called by game.finish_pending_roll(). WIN fires party-monster events then
-        starts the ability generator; LOSE fires the equipped item's passive.
+        Called by game.finish_pending_roll(), which drives whatever generator
+        this returns.
 
-        Returns the generator from use_ability on a WIN, or None on a LOSE.
-        game.finish_pending_roll() drives the returned generator.
+        WIN: fire SUCCESSFUL_HERO_ROLL at party monsters and the equipped item.
+        Sync passives (Arctic Aries' draw) run right here; any GENERATOR an
+        on_event returns (Suspiciously Shiny Coin's "choose a card to discard")
+        is collected and chained BEFORE the hero's ability. Cost-first order is
+        deliberate — if the ability ran first and played ANOTHER hero (Mellow
+        Dee), a reaction prompt would land mid-ROLL_PENDING and wedge the phases.
+
+        LOSE: fire UNSUCCESSFUL_HERO_ROLL at the item; a returned generator is
+        handed to the engine the same way (sync passives just run).
         """
         if self.evaluate_roll(player.current_roll) == RollOutcome.WIN:
-            for party_card in player.party:
-                if isinstance(party_card, Monster):
-                    party_card.on_event(GameEvent.SUCCESSFUL_HERO_ROLL, game, player)
-            return self.use_ability(game, player)
+            reactions = []
+            listeners: list[Card] = [c for c in player.party if isinstance(c, Monster)]
+            if self.item is not None:
+                listeners.append(self.item)
+            for listener in listeners:
+                result = listener.on_event(GameEvent.SUCCESSFUL_HERO_ROLL, game, player)
+                if isinstance(result, GeneratorType):
+                    reactions.append(result)
+            return self._success_chain(game, player, reactions)
         else:
             if self.item is not None:
-                self.item.on_event(GameEvent.UNSUCCESSFUL_HERO_ROLL, game, player)
+                result = self.item.on_event(GameEvent.UNSUCCESSFUL_HERO_ROLL, game, player)
+                if isinstance(result, GeneratorType):
+                    return result
             return None
+
+    def _success_chain(self, game: Game, player: Player, reactions: list):
+        """Splice event reactions + the hero's ability into ONE generator via
+        yield from — the engine drives it without knowing there are several
+        effects inside. use_ability is called lazily so plain (non-generator)
+        abilities also execute in sequence position, after the reactions."""
+        for reaction in reactions:
+            yield from reaction
+        ability_gen = self.use_ability(game, player)
+        if ability_gen is not None:
+            yield from ability_gen
 
     @abstractmethod
     def use_ability(self, game: Game, player: Player) -> Generator | None:
@@ -260,6 +332,7 @@ class Hero(Card):
             "activation_roll":    {"value": self.activation_roll.value, "condition": self.activation_roll.condition.value},
             "item":               self.item.to_dict() if self.item else None,
             "was_used_this_turn": self.was_used_this_turn,
+            "is_sealed":          self.is_sealed,   # UI greys sealed heroes out
         }
 class Monster(Card):
     card_type: CardType = CardType.MONSTER
@@ -272,6 +345,7 @@ class Monster(Card):
         self.fail = fail
         self.party_requirement = party_requirement
         self.fail_description = fail_description
+
     @abstractmethod
     def apply_failure(self, game: Game, player: Player) -> Generator | None:
         """Penalty when a slay attempt rolls in the 'fail' band.
@@ -292,7 +366,7 @@ class Monster(Card):
         # so Card.apply is a no-op here, present only to satisfy the ABC.
         pass
 
-    def on_event(self, event: GameEvent, game: Game, player: Player) -> None:
+    def on_event(self, event: GameEvent, game: Game, player: Player) -> bool | Generator | None:
         # Default: ignore all events. Monsters with passives (Anuran Cauldron,
         # Abyss Queen, ...) override this. Non-no-op so Game can call it blindly.
         pass
@@ -315,20 +389,73 @@ class Monster(Card):
 
 class Item(Card):
     card_type: CardType = CardType.ITEM
+    # Static "while equipped" rule: the hero's effect can't be activated
+    # (Sealing Key). Derived at the use_party_ability choke point — unequip or
+    # steal the item and the hero is unsealed automatically, no bookkeeping.
+    blocks_ability: bool = False
+
     def __init__(self, card_id: str, name: str, description: str, is_cursed: bool = False,) -> None:
         super().__init__(card_id, name, description)
         self.is_cursed = is_cursed
+        # The hero this item is equipped to. Set by Hero.add_item just before
+        # on_equip fires, cleared by Hero.remove_item just after on_unequip.
+        self.owner: Hero | None = None
 
-    def on_event(self, event: GameEvent, game: Game, player: Player) -> None:
-        # Default: ignore events. An item equipped to a hero (e.g. Particularly
-        # Rusty Coin) overrides this to react to that hero's rolls. No-op so
-        # Hero.apply can call self.item.on_event blindly.
+    def on_equip(self) -> None:
+        # Default: nothing happens on equip. Items that modify their hero
+        # (Fighter Mask changes its class) override this; self.owner is set.
+        pass
+
+    def on_unequip(self) -> None:
+        # Default: nothing to undo. Override in tandem with on_equip to restore
+        # whatever on_equip changed; self.owner is still set when this runs.
+        pass
+
+    def apply(self, game: Game, player: Player):
+        """Playing an item EQUIPS it to a hero — shared by every item, so it
+        lives here (template method, like Hero.apply). Concrete items only
+        define their passive via on_event; override apply only for an item
+        with unusual equip rules.
+
+        Generator ability: re-prompts if the chosen hero already holds an item
+        (add_item would silently destroy the old one otherwise).
+
+        Guard FIRST: if no hero anywhere has a free item slot, there is no
+        valid answer to the prompt — yielding it would softlock the game. The
+        card was already committed (spent from hand, AP paid), so on a fizzle
+        it still goes to the discard pile rather than vanishing or sticking
+        around in the hand."""
+        if not any(isinstance(c, Hero) and c.item is None for p in game.players for c in p.party):
+            if self in player.hand:
+                player.hand.remove(self)
+            game.discard_pile.append(self)
+            game.log_event(f"No hero can hold {self.name} — it fizzles to the discard pile")
+            return
+        game.message = f"Choose a hero to equip {self.name} to"
+        while True:
+            target = yield ChoiceType.CHOOSE_HERO_FROM_ANY_PARTY
+            if target.item is None:
+                break
+            game.message = f"{target.name} already holds an item — choose another hero"
+        if self in player.hand:
+            player.hand.remove(self)
+        target.add_item(self)   # sets self.owner and fires on_equip
+        game.log_event(f"{player.name} equipped {self.name} to {target.name}")
+        game.message = None
+
+    def on_event(self, event: GameEvent, game: Game, player: Player) -> bool | Generator | None:
+        # Default: ignore events. An item overrides this to react to its hero's
+        # rolls (return a generator from SUCCESSFUL/UNSUCCESSFUL_HERO_ROLL when
+        # the reaction needs a choice — Suspiciously Shiny Coin), or to
+        # INTERCEPT HERO_DESTROYED / HERO_SACRIFICED by returning True (Decoy
+        # Doll). No-op so callers can invoke self.item.on_event blindly.
         pass
 
     def to_dict(self):
         return {
             **super().to_dict(),
-            "is_cursed": self.is_cursed,
+            "is_cursed":      self.is_cursed,
+            "blocks_ability": self.blocks_ability,   # UI greys out sealed heroes
         }
     
 class Magic(Card):
@@ -372,7 +499,7 @@ class Leader(Card):
         # Leaders are assigned at game start, never played from hand — no-op.
         pass
 
-    def on_event(self, event: GameEvent, game: Game, player: Player) -> None:
+    def on_event(self, event: GameEvent, game: Game, player: Player) -> bool | Generator | None:
         # Default: no passive. Each concrete leader overrides this to react to a
         # single GameEvent (e.g. The Charismatic Song adds +1 on HERO_ROLL).
         pass

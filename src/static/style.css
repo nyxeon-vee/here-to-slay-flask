@@ -163,8 +163,9 @@ button:disabled { background: #2c4636; color: #6f8a78; cursor: not-allowed; }
   /* hidden by default */
 }
 #card-tooltip.visible { opacity: 1; }
-.tip-desc { color: #b5d4be; font-size: 0.88rem; }
-.tip-roll { font-size: 0.82rem; font-weight: 600; letter-spacing: .03em; }
+.tip-desc  { color: #b5d4be; font-size: 0.88rem; }
+.tip-roll  { font-size: 0.82rem; font-weight: 600; letter-spacing: .03em; }
+.tip-class { font-size: 0.78rem; font-weight: 700; letter-spacing: .06em; }
 
 .modifier-opts { display: flex; gap: 4px; margin-top: 4px; }
 .modifier-opts button { padding: 2px 8px; font-size: .7rem; margin: 0; }
@@ -356,8 +357,10 @@ button:disabled { background: #2c4636; color: #6f8a78; cursor: not-allowed; }
   flex-shrink: 0;
 }
 
-/* Hero card: locked at top-left of the stack, sits above the item */
-.party-hero-stack > .card--img {
+/* Hero card: locked at top-left of the stack, sits above the item.
+   :not() keeps this rule OFF the item, which is also a .card--img child —
+   without it, this top:0 out-specifies the item's top and covers the hero. */
+.party-hero-stack > .card--img:not(.party-item-card) {
   position: absolute;
   top: 0;
   left: 0;
@@ -365,9 +368,9 @@ button:disabled { background: #2c4636; color: #6f8a78; cursor: not-allowed; }
 }
 
 /* Item card: mostly under the hero — only the bottom 30px (description strip) peeks out */
-.party-item-card {
+.party-hero-stack > .party-item-card {
   position: absolute !important;
-  top: 110px;
+  top: 110px !important;
   left: 0;
   z-index: 1;
   transition: transform 0.2s ease;
@@ -376,7 +379,7 @@ button:disabled { background: #2c4636; color: #6f8a78; cursor: not-allowed; }
 
 /* On hover: slide the item up so it's readable above the hero.
    Also override the global scale(2) hover — we want a slide, not a zoom. */
-.party-item-card.card--img:hover {
+.party-hero-stack > .party-item-card.card--img:hover {
   transform: translateY(-120px) !important;
   z-index: 15;
   box-shadow: 0 10px 30px #000c;

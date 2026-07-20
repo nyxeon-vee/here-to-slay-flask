@@ -16,4 +16,4 @@ class TheCloakedSage(Leader):
     # after the magic resolves.
     def on_event(self, event: GameEvent, game: Game, player: Player) -> None:
         if event == GameEvent.MAGIC_PLAYED:
-            player.draw(game.deck)
+            game.draw_cards(player)

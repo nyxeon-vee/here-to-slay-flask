@@ -396,6 +396,9 @@ function cardEl(card, opts = {}) {
   if (card.activation_roll) {
     el.dataset.roll = JSON.stringify(card.activation_roll);
   }
+  if (card.hero_class) {
+    el.dataset.heroClass = card.hero_class;   // plain string, e.g. "bard"
+  }
 
   const folder = CARD_TYPE_FOLDER[card.card_type] || card.card_type;
   const img = document.createElement("img");
@@ -605,10 +608,11 @@ function myPartyCard(card) {
       onClick: () => send("submit_choice", { target_hero_uid: card.uid }) }));
   }
   if (isHero && isMyTurn() && STATE.phase === "ACTION") {
-    if (card.was_used_this_turn) {
+    if (card.was_used_this_turn || card.is_sealed) {
       const el = cardEl(card);
       el.style.opacity = "0.45";
-      el.title = "Already used this turn";
+      el.title = card.is_sealed ? `Sealed by ${card.item.name} — ability unusable`
+                                : "Already used this turn";
       return stackWithItem(card, el);
     }
     return stackWithItem(card, cardEl(card, { selectable: true,
@@ -722,6 +726,14 @@ function escapeHtml(s) {
 
 // ── Custom card tooltip ────────────────────────────────────────────────────
 // Replaces native `title` so we can control font size and style.
+const CLASS_COLORS = {
+  fighter:  "#eb5757",
+  ranger:   "#6fcf97",
+  wizard:   "#bb6bd9",
+  bard:     "#f2c14e",
+  thief:    "#b0b0b0",
+  guardian: "#7ec8f2",
+};
 const _tip = document.createElement("div");
 _tip.id = "card-tooltip";
 document.body.appendChild(_tip);
@@ -740,6 +752,13 @@ document.addEventListener("mouseover", e => {
     const color   = atLeast ? "#6fcf97" : "#eb5757";
     html += `<br><span class="tip-roll" style="color:${color}">`
           + `Roll ${sign}${roll.value} or ${atLeast ? "higher" : "lower"}`
+          + `</span>`;
+  }
+  if (card.dataset.heroClass) {
+    const cls = card.dataset.heroClass;       // plain string set by cardEl
+    const clsColor = CLASS_COLORS[cls] || "#c7e0cf";
+    html += `<br><span class="tip-class" style="color:${clsColor}">`
+          + `CLASS: ${escapeHtml(cls.toUpperCase())}`
           + `</span>`;
   }
 

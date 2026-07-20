@@ -55,6 +55,9 @@ class Game(ChallengeMixin, RollMixin, ChoiceMixin, EffectsMixin):
         #    held here during the CHALLENGE_WINDOW so it can be challenged.
         self.pending_card: Card | None = None
         self.pending_player: Player | None = None
+        # A monster ATTACK waiting out the challenge window (attacks are
+        # challengeable too). Mutually exclusive with pending_card.
+        self.pending_attack: Monster | None = None
         self.challenge_context: dict | None = None  # set while a challenge is rolling
 
         # ── Choice scratchpad: filled by the UI, read by _get_choice_answer ──
@@ -128,8 +131,7 @@ class Game(ChallengeMixin, RollMixin, ChoiceMixin, EffectsMixin):
 
         for player in self.players:
             player.party_leader = self.leader_deck.pop()
-            for _ in range(5):
-                player.draw(self.deck)
+            self.draw_cards(player, 5)
 
         for _ in range(3):
             self.refill_monster_row()
@@ -160,10 +162,19 @@ class Game(ChallengeMixin, RollMixin, ChoiceMixin, EffectsMixin):
         self.log_event(f"{player.name} played {card.name}")
 
     def resolve_pending_card(self) -> None:
-        # Run the pending card's effect. Also called by close_challenge_roll_2
-        # when a challenge fails.
+        # Run the pending card's effect — or start a pending ATTACK's roll.
+        # Also called by close_challenge_roll_2 when a challenge fails.
         if self.phase != Phase.CHALLENGE_WINDOW:
             raise InvalidPhaseError("")
+        # A monster attack waiting out the window (no card involved): the
+        # window survived, so roll for it now.
+        if self.pending_attack is not None:
+            monster, attacker = self.pending_attack, self.pending_player
+            assert attacker is not None  # set together with pending_attack
+            self.pending_attack = None
+            self.pending_player = None
+            self._begin_attack_roll(attacker, monster)
+            return
         assert self.pending_card is not None and self.pending_player is not None  # set by play_card
         card, player = self.pending_card, self.pending_player
         result = self._execute_card(player, card)
@@ -195,6 +206,7 @@ class Game(ChallengeMixin, RollMixin, ChoiceMixin, EffectsMixin):
     def _clear_pending_card(self) -> None:
         # Wipe the per-card scratchpad and hand control back to the active player.
         self.pending_card = None
+        self.pending_attack = None
         self.pending_player = None
         self.target_player = None
         self.target_hero = None
@@ -213,6 +225,11 @@ class Game(ChallengeMixin, RollMixin, ChoiceMixin, EffectsMixin):
             raise CardNotInPartyError
         if card.was_used_this_turn:
             raise InvalidPhaseError(f"{card.name}'s ability has already been used this turn!")
+        # Sealing Key: a blocking item shuts the ability off entirely. Checked
+        # BEFORE the AP spend — finding out shouldn't cost anything.
+        if card.is_sealed:
+            sealer = card.item.name if card.item else "an item"
+            raise InvalidPhaseError(f"{card.name} is sealed by {sealer} — its effect cannot be used!")
         self._spend_ap(player, card.action_cost)
         self.log_event(f"{player.name} uses {card.name}'s ability")
         card.roll_and_activate(self, player, context_type="hero_party")
@@ -256,7 +273,7 @@ class Game(ChallengeMixin, RollMixin, ChoiceMixin, EffectsMixin):
         if player != self.current_player:
             raise InvalidPhaseError("It is not your turn!")
         self._spend_ap(player, 1)
-        player.draw(self.deck)
+        self.draw_cards(player)
         self.log_event(f"{player.name} drew a card")
 
     def discard_all_cards(self, player: Player) -> None:
@@ -267,8 +284,7 @@ class Game(ChallengeMixin, RollMixin, ChoiceMixin, EffectsMixin):
             raise InvalidPhaseError("It is not your turn!")
         self._spend_ap(player, 3)
         self.discard_pile.extend(player.discard_hand())
-        for _ in range(5):
-            player.draw(self.deck)
+        self.draw_cards(player, 5)
         self.log_event(f"{player.name} discarded their hand and drew 5 new cards")
 
     # ── Board upkeep ────────────────────────────────────────────────────────

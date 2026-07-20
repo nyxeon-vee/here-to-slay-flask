@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 from game_logic.base import Challenge, GameEvent, Phase
 from game_logic.exceptions import CardNotInHandError, InvalidPhaseError
 if TYPE_CHECKING:
-    from game_logic.base import Card
+    from game_logic.base import Card, Monster
     from game_logic.player import Player
 
 
@@ -29,6 +29,7 @@ class ChallengeMixin:
         current_player: Player | None
         pending_card: Card | None
         pending_player: Player | None
+        pending_attack: Monster | None
         challenge_context: dict | None
         discard_pile: list[Card]
         last_roll_player_id: str | None
@@ -46,17 +47,25 @@ class ChallengeMixin:
             raise InvalidPhaseError("Can only challenge during the challenge window!")
         if player == self.current_player:
             raise InvalidPhaseError("You cannot challenge your own action!")
-        # Iron Resolve: the pending player's plays can't be challenged this turn.
-        # Checked AFTER the phase check so pending_player is guaranteed to be set,
-        # and deliberately server-side — the challenger finds out by trying.
-        if self.pending_player and self.pending_player.challenge_protected:
+        # Iron Resolve: the pending player's CARD plays can't be challenged this
+        # turn (its text covers cards, not monster attacks). Checked AFTER the
+        # phase check so pending_player is guaranteed to be set, and deliberately
+        # server-side — the challenger finds out by trying.
+        if self.pending_card is not None \
+                and self.pending_player and self.pending_player.challenge_protected:
             raise InvalidPhaseError(f"{self.pending_player.name} is protected from Challenges!")
         if card not in player.hand:
             raise CardNotInHandError(f"{card!r} is not in {player.name}'s hand")
         player.hand.remove(card)
         self.discard_pile.append(card)
-        pc = self.pending_card
-        self.log_event(f"{player.name} challenged {pc.name if pc else 'the card'}!", "combat")
+        if self.pending_attack is not None:
+            pp = self.pending_player
+            self.log_event(
+                f"{player.name} challenged {pp.name if pp else 'the'} attack "
+                f"on {self.pending_attack.name}!", "combat")
+        else:
+            pc = self.pending_card
+            self.log_event(f"{player.name} challenged {pc.name if pc else 'the card'}!", "combat")
         self.start_challenge(challenger=player)
 
     def start_challenge(self, challenger: Player) -> None:
@@ -97,6 +106,16 @@ class ChallengeMixin:
         self.last_roll_initial = 0
         self.last_roll_current = 0
         if challenger.current_roll >= challenged.current_roll:  # tie goes to challenger
+            # A challenged monster ATTACK: cancel it. There's no card to
+            # discard — the monster stays in the row and the 2 AP stay spent.
+            if self.pending_attack is not None:
+                self.log_event(
+                    f"Challenge succeeded ({challenger.current_roll} vs {challenged.current_roll}) "
+                    f"— the attack on {self.pending_attack.name} is cancelled", "combat")
+                self.pending_attack = None
+                self.pending_player = None
+                self.phase = Phase.ACTION
+                return
             # Challenge succeeds: the card is cancelled. It was committed to the
             # table but never resolved, so it's still in the player's hand — pull
             # it out and discard it, then dock the player an action point.

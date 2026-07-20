@@ -38,6 +38,5 @@ class Hook(Hero):
             game.log_event(f"{player.name} has no hero free to equip an item")
 
         # The draw is unconditional — the text says "and DRAW", not "If you do".
-        if game.deck:
-            player.draw(game.deck)
+        if game.draw_cards(player):
             game.log_event(f"{player.name} drew a card")

@@ -15,9 +15,10 @@ class PanChucks(Hero):
         )
 
     def use_ability(self, game: Game, player: Player):
-        player.draw(game.deck)
-        player.draw(game.deck)
-        drawn = player.hand[-2:]
+        n = game.draw_cards(player, 2)
+        if n == 0:
+            return  # nothing drawn — no Challenge to reveal either
+        drawn = player.hand[-n:]
         if not any(isinstance(c, Challenge) for c in drawn):
             return  # no Challenge drawn — bonus can't happen
         game.message = "Reveal a Challenge card and destroy a hero?"

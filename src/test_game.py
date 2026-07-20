@@ -140,8 +140,10 @@ monster = game.monster_row[0]
 ap_before = alice.action_points
 print(f"  Attacking {monster.name}...")
 game.attack_monster(alice, monster)
-assert_phase(game, Phase.ROLL_PENDING)  # modifier window open
-game.finish_pending_roll()              # window expires -> outcome applies
+assert_phase(game, Phase.CHALLENGE_WINDOW)  # attacks are challengeable too
+game.resolve_pending_card()                 # window expires unchallenged -> roll
+assert_phase(game, Phase.ROLL_PENDING)      # modifier window open
+game.finish_pending_roll()                  # window expires -> outcome applies
 print(f"  Alice rolled: {alice.current_roll}")
 assert monster in alice.party, "Monster should be in Alice's party"
 assert monster not in game.monster_row, "Monster should leave row"

@@ -32,7 +32,10 @@ class Player:
         self.destroy_protected: bool = False
         
     def draw(self, deck: list[Card]) -> None:
-        self.hand.append(deck.pop())
+        # Backstop: silently no-op on an empty deck. Prefer game.draw_cards(),
+        # which also recycles the discard pile per the official rule.
+        if deck:
+            self.hand.append(deck.pop())
 
     def discard(self, card: Card) -> None:
         if card not in self.hand:

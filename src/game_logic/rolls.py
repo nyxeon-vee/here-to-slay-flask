@@ -26,6 +26,8 @@ class RollMixin:
     if TYPE_CHECKING:  # attributes/methods owned by Game and its other mixins
         phase: Phase
         current_player: Player | None
+        pending_player: Player | None
+        pending_attack: Monster | None
         challenge_context: dict | None
         pending_roll_context: dict | None
         discard_pile: list[Card]
@@ -122,9 +124,18 @@ class RollMixin:
             raise InvalidPhaseError("It is not your turn!")
         if monster not in self.monster_row:
             raise InvalidPhaseError("That monster is not in the monster row!")
-
         self._spend_ap(player, 2)
         self.log_event(f"{player.name} attacks {monster.name}", "combat")
+        # Attacks are challengeable, like card plays: park in CHALLENGE_WINDOW.
+        # If the window expires unchallenged (or the challenge fails),
+        # resolve_pending_card sees pending_attack and calls _begin_attack_roll.
+        # A successful challenge cancels the attack — the 2 AP stay spent.
+        self.pending_attack = monster
+        self.pending_player = player
+        self.phase = Phase.CHALLENGE_WINDOW
+
+    def _begin_attack_roll(self, player: Player, monster: Monster) -> None:
+        """The attack survived the challenge window — roll for it now."""
         self.phase = Phase.ROLL_PENDING
         self.roll_dice(player)
         # Passives: The Divine Arrow leader +1, Anuran Cauldron party monster +1, ...
